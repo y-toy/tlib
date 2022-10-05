@@ -546,5 +546,38 @@ class util{
 		}
 		return $plaintext;
 	}
+
+	/**
+	 * ログ出力関数
+	 * ハンドルできないエラーでのみ最後のログ出力として使用。$level = 1 debug 2 warn 3 error
+	 * いちいちファイル開いて閉じていて、重たいので基本使用しない。ちなみに、実行時に90日以前のログファイルを削除している。
+	 *
+	 * @param string $file 出力先のログファイル
+	 * @param int $level 1 debug 2 warn 3 error
+	 * @param string $message
+	 * @return void
+	 */
+	static function vitalLogOut(string $outFolder, int $level, string $message){
+
+		$datetime = date("Ymd");
+		$file = $outFolder . "${datetime}.log";
+
+		//*** ファイル書き込み
+		$fp = fopen($file, "c");
+		if ($fp===FALSE){ return ; }
+
+		fseek($fp, 0, SEEK_END);
+
+		$level_str = "ERR";
+			if ($level == 1){ $level_str = "DBG"; }
+		elseif ($level == 2){ $level_str = "WRN"; }
+
+		fwrite($fp, "[". date('Y/m/d H:i:s') ."] [${level_str}] " . $message . "\n");
+
+		fclose($fp);
+
+		//*** ログフォルダー以下の古いファイルを削除
+		self::deleteOldFiles($outFolder, 90);
+	}
 }
 

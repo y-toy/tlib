@@ -10,33 +10,7 @@ class clsDB extends \mysqli {
 	private ?bool $bConnected = false;
 	private string $errorInfo = '';
 	private bool $bRockTable = false;
-
-	public function __construct(array $conf) {
-		if ($this->bConnected){ $this->close(); $this->bConnected = false; }
-
-		parent::__construct($conf['host'], $conf['user'], $conf['pass'], $conf['name'], $conf['port'], $conf['socket']);
-		// エラー時
-		if ($this->connect_errno){
-			$this->errorInfo = $this->connect_errno . ' : ' . $this->connect_error;
-		}
-		$this->bConnected = true;
-	}
-	public function __destruct(){
-		if ($this->bRockTable){ $this->unlockTables(); }
-	}
-
-	public function query(string $query, ?int $resultmode = NULL) : \mysqli_result|bool {
-		$ret = parent::query($query, $resultmode);
-		if ($ret === false){
-			$this->errorInfo = $this->errno . ' : ' . $this->error;
-		}
-		return $ret;
-	}
-
-	// 接続済みか
-	public function isThisConnected(){ return $this->bConnected; }
-	// エラー時のエラー情報
-	public function getErrorInfo(){ return $this->errorInfo; }
+	private string $logFolder = ''; // これが''でなければ、エラー時にこのフォルダの下にログを出力する。
 
 	//
 	// トランザクションのやり方は以下
@@ -54,11 +28,41 @@ class clsDB extends \mysqli {
 	// ロックは本クラスのwriteLockTableを利用のこと。
 	//
 
+	public function __construct(array $conf) {
+		if ($this->bConnected){ $this->close(); $this->bConnected = false; }
+		$this->logFolder = isset($conf['dbLogFolder'])?$conf['dbLogFolder']:'';
+
+		parent::__construct($conf['host'], $conf['user'], $conf['pass'], $conf['name'], $conf['port'], $conf['socket']);
+
+		// エラー時
+		if ($this->connect_errno){
+			$this->errorInfo = $this->connect_errno . ' : ' . $this->connect_error;
+			if ($this->logFolder != ''){
+				\tlib\util::vitalLogOut($this->logFolder, 3, $this->errorInfo);
+			}
+		}
+		$this->bConnected = true;
+	}
+	public function __destruct(){
+		if ($this->bRockTable){ $this->unlockTables(); }
+	}
+
+	public function query(string $query, ?int $resultmode = NULL) : \mysqli_result|bool {
+		$ret = parent::query($query, $resultmode);
+		if ($ret === false){ $this->whenQueryError($query); }
+		return $ret;
+	}
+
+	// 接続済みか
+	public function isThisConnected(){ return $this->bConnected; }
+	// エラー時のエラー情報
+	public function getErrorInfo(){ return $this->errorInfo; }
+
 	// 1行目の1つ目のカラムのみ取得（count(*)などで使用）
 	// 結果に1行も無い場合もエラーを返すので注意のこと
 	public function getFirstOne(string $sql) : null|string|int|float {
 		$res = $this->query($sql);
-		if ($res === FALSE){ $this->errorInfo = $this->errno . ' : ' . $this->error; return null; }
+		if ($res === FALSE){ $this->whenQueryError($sql); return null; }
 		if ($res->num_rows == 0){ return null; }
 		$row = $res->fetch_row();
 		$res->free();
@@ -69,7 +73,7 @@ class clsDB extends \mysqli {
 	// 結果に1行も無い場合やエラーの場合、空文字''を返すので注意のこと
 	public function getFirstOneStr(string $sql) : string {
 		$res = $this->query($sql);
-		if ($res === FALSE){ $this->errorInfo = $this->errno . ' : ' . $this->error; return ''; }
+		if ($res === FALSE){ $this->whenQueryError($sql); return ''; }
 		if ($res->num_rows == 0){ return ''; }
 		$row = $res->fetch_row();
 		$res->free();
@@ -80,7 +84,7 @@ class clsDB extends \mysqli {
 	// 結果に1行も無い場合もエラーを返すので注意のこと
 	public function getFirstRow(string $sql) : null | array {
 		$res = $this->query($sql);
-		if ($res === FALSE){ $this->errorInfo = $this->errno . ' : ' . $this->error; return null; }
+		if ($res === FALSE){ $this->whenQueryError($sql); return null; }
 		if ($res->num_rows == 0){ return null; }
 		$row = $res->fetch_row();
 		$res->free();
@@ -91,7 +95,7 @@ class clsDB extends \mysqli {
 	// 結果に1行も無い場合もエラーを返すので注意のこと
 	public function getFirstRowAssoc(string $sql) : null | array {
 		$res = $this->query($sql);
-		if ($res === FALSE){ $this->errorInfo = $this->errno . ' : ' . $this->error; return null; }
+		if ($res === FALSE){ $this->whenQueryError($sql); return null; }
 		if ($res->num_rows == 0){ return null; }
 		$row = $res->fetch_assoc();
 		$res->free();
@@ -102,7 +106,7 @@ class clsDB extends \mysqli {
 	// エラー時はFALSEを返す。
 	public function getArrayClm(string $sql, int $clm=0) : null|array {
 		$res = $this->query($sql);
-		if ($res === FALSE){ $this->errorInfo = $this->errno . ' : ' . $this->error; return null; }
+		if ($res === FALSE){ $this->whenQueryError($sql); return null; }
 		$aryRet = array();
 		while(($row = $res->fetch_row())){ $aryRet[] = $row[$clm]; }
 		$res->free();
@@ -112,7 +116,7 @@ class clsDB extends \mysqli {
 	// 全結果の配列化 戻りが巨大になりそうな場合はメモリを食うので使用を避けること。
 	public function getAll(string $sql) : null|array {
 		$res = $this->query($sql);
-		if ($res === FALSE){ $this->errorInfo = $this->errno . ' : ' . $this->error; return null; }
+		if ($res === FALSE){ $this->whenQueryError($sql); return null; }
 		$aryRet = array();
 		while(($row = $res->fetch_row())){
 			$aryRet[] = $row;
@@ -123,7 +127,7 @@ class clsDB extends \mysqli {
 	// 全結果の配列化のfetch_assoc版
 	public function getAllAssoc(string $sql){
 		$res = $this->query($sql);
-		if ($res === FALSE){ $this->errorInfo = $this->errno . ' : ' . $this->error; return null; }
+		if ($res === FALSE){ $this->whenQueryError($sql); return null; }
 		$aryRet = array();
 		while(($row = $res->fetch_assoc())){
 			$aryRet[] = $row;
@@ -135,17 +139,25 @@ class clsDB extends \mysqli {
 	// テーブルロックを行う。（NG時は1秒waitし、10回トライ）
 	// $tablesはarray
 	public function writeLockTable(array $tables) : bool{
+		$sql = 'LOCK TABLES ' . implode(' WRITE,', $tables) . ' WRITE';
 		for ($i=0;$i < 10;$i++){
-			$ret = $this->query('LOCK TABLES ' . implode(' WRITE,', $tables) . ' WRITE');
+			$ret = $this->query($sql);
 			if ($ret){ $this->bRockTable = true; return TRUE; }
 			sleep(1);
 		}
-
+		$this->whenQueryError($sql);
 		return FALSE;
 	}
 	// アンロックテーブル
 	public function unlockTables(){
 		$this->bRockTable = false;
 		return $this->query('UNLOCK TABLES');
+	}
+
+	private function whenQueryError($sql){
+		$this->errorInfo = $this->errno . ' : ' . $this->error . ' : ' . $sql;
+		if ($this->logFolder != ''){
+			\tlib\util::vitalLogOut($this->logFolder, 3, $this->errorInfo);
+		}
 	}
 }

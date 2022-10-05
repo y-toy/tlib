@@ -335,13 +335,6 @@ class myModel {
 	// 登録
 
 	/**
-	 * 登録する。
-	 * プライマリーキーが自動取得出来る場合は自動で取得する。
-	 *  =>
-	 *
-	 * @return boolean
-	 */
-	/**
 	 * INSERT処理を行う。
 	 * プライマリーキーの自動取得が指定された場合は、自動で取得(MAX()+1)、もしくは、auto_incrementの場合は何もしない
 	 * auto_incrementの場合、$this->getLastIndexId()で挿入したIDを取得可
