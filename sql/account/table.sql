@@ -6,6 +6,11 @@
 --- ユーザアカウント ---
 -------------------------------------------------------------------------------
 
+-- 基本的に認証は、ACCOUNT_AUTH.ID_INFOとACCOUNT.PASSで行う。パスワードは１つだが、IDにはメールアドレスや電話番号などが使えるようにしている。
+-- 2段認証は登録しているACCOUNT_AUTHの中から１つだけ選択。2段認証の場合(ACCOUNT.TFA=1)、基本認証後に、
+-- 右でJOINした(ACCOUNT.ACCOUNT_ID = ACCOUNT_AUTH.AUTH_ID AND ACCOUNT.TFA_AUTH_ID = ACCOUNT_AUTH.AUTH_ID)認証情報にメール／SMSでコードを送付する。
+--
+
 -- アカウント情報
 DROP TABLE IF EXISTS ACCOUNT;
 CREATE TABLE IF NOT EXISTS ACCOUNT(
@@ -47,8 +52,7 @@ CREATE TABLE IF NOT EXISTS AUTH_VERIFY(
 	VERIFY_CODE VARCHAR(12) NOT NULL comment '認証コード',
 	TEMP_SESSION_KEY CHAR(64) NOT NULL UNIQUE comment 'hash("sha3-256", ID_INFO+random_bytes(32))',
 	PASS CHAR(64) DEFAULT NULL comment 'アカウントがない初期登録時に使用 hash("sha3-256", "password") アカウント作成時にコピー',
-	IP_ADDRESS VARBINARY(16) NOT NULL COMMENT "Store IPv4 and IPv6 both. INET6_ATON 攻撃チェック用",
-	AUTHED_CNT INT unsigned default 0 COMMENT "認証にトライした数 攻撃チェック用",
+	AUTHED_CNT INT unsigned default 0 COMMENT "認証にトライした数 攻撃チェック用 5回以上は終了",
 	EXPIRE_TIME DATETIME NOT NULL comment '登録期限 30分',
 	INSERT_TIME DATETIME NOT NULL comment '登録時間',
 	INDEX INDEX_ID_INFO (ID_INFO),

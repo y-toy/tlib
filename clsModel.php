@@ -75,6 +75,17 @@ class myModel {
 
 	function __destruct(){}
 
+	///////////////////////////////////////////////////////////////////////////
+	// apcu関係
+
+	static function clearAPCu(string $tableName) : bool{
+		if (!\apcu_enabled()){ return false;  }
+		return (apcu_delete($tableName) !== FALSE);
+	}
+
+	///////////////////////////////////////////////////////////////////////////
+	// 基礎
+
 	// カラムタイプを数値型=0 / 日付／文字列方=1 日付型=2に変換する。
 	// 文字列の囲い''が必要か判断する。
 	function convClmType(string $type) : int{
@@ -207,7 +218,7 @@ class myModel {
 	}
 
 	/**
-	 * 検索し最初の一行を$this->val内部格納 コピーしてinsert等の場合にしよう
+	 * 検索し最初の一行を$this->val内部格納 コピーしてinsert等の場合に使用
 	 *
 	 * @param mixed $key Where句で使うデータ。array('clmName'=>'value', 'clmName'=>'value', ...) or 配列ではない場合はプライマリキーが１つとしてそれが指定されたものとみなす。
 	 * @param bool $bPriKeyCheck プライマリーキーが$keyに指定されているかチェックする場合はtrue チェックがNGの場合は検索しない。

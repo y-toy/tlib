@@ -39,10 +39,10 @@ class clsAccount {
 	 * @param integer $APP_ID アカウント登録するAPP
 	 * @param integer $ID_TYPE 1 e-mail 2 SMS 99 任意文字列
 	 * @param string $ID_INFO ID_TYPE=1の場合 e-mail 2の場合 電話番号 99の場合任意文字列
-	 * @param string $PASS hash("sha3-256", "password")済みのデータ
+	 * @param string $PASS パスワード hash("sha3-256", "password")でハッシュ化された文字列。認証の都合上外部でハッシュすること。
 	 * @param integer $TFA 2段階認証を行うか 1 行う 0 行わない
 	 * @param integer $LOGIN_NOTICE ログイン時に通知するか 1 する 0 しない
-	 * @return boolean
+	 * @return boolean true 正常 fales 異常 if false, check $this->strError to get what error occured.
 	 */
 	public function addNewAccount(int $APP_ID, int $ID_TYPE, string $ID_INFO, string $PASS, int $TFA=1, int $LOGIN_NOTICE=1) : bool {
 
