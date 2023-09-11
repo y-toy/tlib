@@ -1,3 +1,5 @@
 email/*
 vendor/*
 composer.lock
+zz_test/*
+zz_test

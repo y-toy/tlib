@@ -516,6 +516,39 @@ class util{
 		return $r_str;
 	}
 
+	/**
+	 * str_replaceのマルチバイト版
+	 *
+	 * @param mixed $search  array|string　検索文字列 (配列可)
+	 * @param mixed $replace  array|string　置換文字列 (配列可)
+	 * @param mixed $haystack  array|string　置換対象文字列 (配列可)
+	 * @param string $encoding
+	 * @return string 置換後の文字列
+	 */
+	static function mb_str_replace(mixed $search, mixed $replace, mixed $haystack, $encoding='UTF-8') : string{
+		// 検索先は配列か？
+		$notArray = !is_array($haystack) ? TRUE : FALSE;
+		// コンバート
+		$haystack = $notArray ? array($haystack) : $haystack;
+		// 検索文字列の文字数取得
+		$search_len = mb_strlen($search, $encoding);
+		// 置換文字列の文字数取得
+		$replace_len = mb_strlen($replace, $encoding);
+
+		foreach ($haystack as $i => $hay){
+			// マッチング
+			$offset = mb_strpos($hay, $search);
+			// 一致した場合
+			while ($offset !== FALSE){
+				// 差替え処理
+				$hay = mb_substr($hay, 0, $offset).$replace.mb_substr($hay, $offset + $search_len);
+				$offset = mb_strpos($hay, $search, $offset + $replace_len);
+			}
+			$haystack[$i] = $hay;
+		}
+		return $notArray ? $haystack[0] : $haystack;
+	}
+
 	/*****************************************************************************/
 	/*** 暗号／復号 ***/
 	/*****************************************************************************/
@@ -552,27 +585,35 @@ class util{
 	 * ハンドルできないエラーでのみ最後のログ出力として使用。$level = 1 debug 2 warn 3 error
 	 * いちいちファイル開いて閉じていて、重たいので基本使用しない。ちなみに、実行時に90日以前のログファイルを削除している。
 	 *
-	 * @param string $file 出力先のログファイル
 	 * @param int $level 1 debug 2 warn 3 error
 	 * @param string $message
+	 * @param string $file 出力先のフォルダー 最後はスラッシュで終わること。
 	 * @return void
 	 */
-	static function vitalLogOut(string $outFolder, int $level, string $message){
+	static function vitalLogOut(int $level, string $message, string $outFolder = ''){
 
-		$datetime = date("Ymd");
-		$file = $outFolder . "${datetime}.log";
+		if ($outFolder == ''){
+			if (isset($GLOBALS['tlib_log'])){
+				$outFolder = $GLOBALS['tlib_log'];
+			}else{
+				$outFolder = __DIR__ . '/logs/';
+			}
+		}
+		$outFolder = rtrim( $outFolder, '/' ) . '/';
+		$file = $outFolder . date('Ymd') . '.log';
 
 		//*** ファイル書き込み
-		$fp = fopen($file, "c");
+		$fp = fopen($file, 'c');
 		if ($fp===FALSE){ return ; }
 
 		fseek($fp, 0, SEEK_END);
 
-		$level_str = "ERR";
-			if ($level == 1){ $level_str = "DBG"; }
-		elseif ($level == 2){ $level_str = "WRN"; }
+		$level_str = 'ERR';
+			if ($level == 1){ $level_str = 'DBG'; }
+		elseif ($level == 2){ $level_str = 'WRN'; }
 
-		fwrite($fp, "[". date('Y/m/d H:i:s') ."] [${level_str}] " . $message . "\n");
+		$contents = '[' . date('Y/m/d H:i:s') . '] [' . $level_str . '] ' . $message . "\r\n";
+		fwrite($fp, $contents);
 
 		fclose($fp);
 

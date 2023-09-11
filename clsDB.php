@@ -32,7 +32,11 @@ class clsDB extends \mysqli {
 		if ($this->bConnected){ $this->close(); $this->bConnected = false; }
 		$this->logFolder = isset($conf['dbLogFolder'])?$conf['dbLogFolder']:'';
 
-		parent::__construct($conf['host'], $conf['user'], $conf['pass'], $conf['name'], $conf['port'], $conf['socket']);
+		try{
+			parent::__construct($conf['host'], $conf['user'], $conf['pass'], $conf['name'], $conf['port'], $conf['socket']);
+		}catch(mysqli_sql_exception $e){
+
+		}
 
 		// エラー時
 		if ($this->connect_errno){

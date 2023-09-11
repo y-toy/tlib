@@ -6,11 +6,6 @@
 --- ユーザアカウント ---
 -------------------------------------------------------------------------------
 
--- 基本的に認証は、ACCOUNT_AUTH.ID_INFOとACCOUNT.PASSで行う。パスワードは１つだが、IDにはメールアドレスや電話番号などが使えるようにしている。
--- 2段認証は登録しているACCOUNT_AUTHの中から１つだけ選択。2段認証の場合(ACCOUNT.TFA=1)、基本認証後に、
--- 右でJOINした(ACCOUNT.ACCOUNT_ID = ACCOUNT_AUTH.AUTH_ID AND ACCOUNT.TFA_AUTH_ID = ACCOUNT_AUTH.AUTH_ID)認証情報にメール／SMSでコードを送付する。
---
-
 -- アカウント情報
 DROP TABLE IF EXISTS ACCOUNT;
 CREATE TABLE IF NOT EXISTS ACCOUNT(
@@ -35,7 +30,7 @@ CREATE TABLE NOT EXISTS ACCOUNT_AUTH(
 	ACCOUNT_ID BIGINT unsigned comment 'ACCOUNT::ACCOUNT_ID',
 	AUTH_ID INT unsigned comment 'Index用 1～',
 	ID_TYPE TINYINT unsigned comment '1 e-mail 2 SMS 99 任意文字列(英字必須 & 特殊文字NG)',
-	ID_INFO VARCHAR(128) NOT NULL comment 'ID_TYPE=1の場合 e-mail 2の場合 電話番号 99の場合任意文字列 ',
+	ID_INFO VARCHAR(128) NOT NULL comment 'ID_TYPE=1の場合 e-mailアドレス 2の場合 電話番号 99の場合任意文字列 ',
 	INSERT_TIME DATETIME NOT NULL comment '登録時間',
 	VALID TINYINT unsigned comment '1 有効 0 無効',
 	PRIMARY KEY (ACCOUNT_ID, AUTH_ID),
@@ -47,12 +42,10 @@ CREATE TABLE NOT EXISTS ACCOUNT_AUTH(
 DROP TABLE IF EXISTS AUTH_VERIFY;
 CREATE TABLE IF NOT EXISTS AUTH_VERIFY(
 	ACCOUNT_ID BIGINT unsigned comment 'ACCOUNT::ACCOUNT_ID アカウントがない場合0',
-	ID_TYPE TINYINT unsigned comment '1 e-mail 2 SMS 99 任意文字列(英字必須 & 特殊文字NG)',
-	ID_INFO VARCHAR(128) NOT NULL comment 'ID_TYPE=1の場合 e-mail 2の場合 電話番号 99の場合任意文字列 ',
+	AUTH_ID INT unsigned comment 'ACCOUNT_AUTH::AUTH_ID 認証を送ったemail/SMSの参考用',
 	VERIFY_CODE VARCHAR(12) NOT NULL comment '認証コード',
 	TEMP_SESSION_KEY CHAR(64) NOT NULL UNIQUE comment 'hash("sha3-256", ID_INFO+random_bytes(32))',
 	PASS CHAR(64) DEFAULT NULL comment 'アカウントがない初期登録時に使用 hash("sha3-256", "password") アカウント作成時にコピー',
-	AUTHED_CNT INT unsigned default 0 COMMENT "認証にトライした数 攻撃チェック用 5回以上は終了",
 	EXPIRE_TIME DATETIME NOT NULL comment '登録期限 30分',
 	INSERT_TIME DATETIME NOT NULL comment '登録時間',
 	INDEX INDEX_ID_INFO (ID_INFO),
@@ -105,6 +98,7 @@ CREATE TABLE IF NOT EXISTS OAUTH_SESSION(
 	ACCOUNT_ID BIGINT unsigned comment 'ACCOUNT::ACCOUNT_ID',
 	ACCESS_TOKEN CHAR(64) comment 'hash("sha3-256", APP_ID + ACCOUNT_ID + time+random_bytes(32)) APPから求められた時に返すACCESS_TOKEN',
 	USER_INFO JSON comment 'ログイン時のユーザの情報{IP:"", COUNTRY:"", etc..} 現状IPのみ',
+	LAST_CHECK_TIME DATETIME NOT NULL comment '最後にSESSIONをチェックした時間',
 	EXPIRE_TIME DATETIME DEFAULT NULL comment '1年ぐらい NULLの場合は期限なし',
 	INSERT_TIME DATETIME NOT NULL comment 'セッション登録時',
 	PRIMARY KEY (ACCESS_TOKEN),

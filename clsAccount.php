@@ -12,17 +12,20 @@ class clsAccount {
 
 	protected ?clsDB $db = null;
 	protected $loginExpiredDays = 0; // ログインのセッションの有効期限日数
-	protected $strError = ''; // エラーが発生した際にエラー内容を入れておくメンバ変数
+	protected $strError = ''; // エラーが発生した際にエラー内容を入れておくメンバ変数 基本英語
 	protected $bChangeDB = false; // 実行時にDBを変更する場合 true
+	protected $strAcntDBName = '';
 	protected $strBackDBName = ''; //  実行時にDBを変更する場合、処理後にDBを戻す名前
 
 	///////////////////////////////////////////////////////////////////////////
 	// construct / destruct
 
-	public function __construct(clsDB $db, int $loginExpiredDays = 365, bool $bChangeDB = false, string $strBackDBName=''){
+	public function __construct(clsDB &$db, int $loginExpiredDays = 365, bool $bChangeDB = false, string $strAcntDBName = 'account', string $strBackDBName=''){
+		// 各引数の内容はメンバ変数参照
 		$this->db = $db;
 		$this->loginExpiredDays = $loginExpiredDays;
 		$this->bChangeDB = $bChangeDB;
+		$this->strAcntDBName = $strAcntDBName;
 		$this->strBackDBName = $strBackDBName;
 	}
 
@@ -34,15 +37,15 @@ class clsAccount {
 	// アカウント関係
 
 	/**
-	 * アカウント登録 認証系の場合、self::checkVerifyを実行すればアカウント登録までされるので注意
+	 * アカウント登録 2段認証後
 	 *
 	 * @param integer $APP_ID アカウント登録するAPP
 	 * @param integer $ID_TYPE 1 e-mail 2 SMS 99 任意文字列
 	 * @param string $ID_INFO ID_TYPE=1の場合 e-mail 2の場合 電話番号 99の場合任意文字列
-	 * @param string $PASS パスワード hash("sha3-256", "password")でハッシュ化された文字列。認証の都合上外部でハッシュすること。
-	 * @param integer $TFA 2段階認証を行うか 1 行う 0 行わない
+	 * @param string $PASS hash("sha3-256", "password")済みのデータ
+	 * @param integer $TFA ログインで2段階認証を行うか 1 行う 0 行わない
 	 * @param integer $LOGIN_NOTICE ログイン時に通知するか 1 する 0 しない
-	 * @return boolean true 正常 fales 異常 if false, check $this->strError to get what error occured.
+	 * @return boolean false エラー true 登録完了
 	 */
 	public function addNewAccount(int $APP_ID, int $ID_TYPE, string $ID_INFO, string $PASS, int $TFA=1, int $LOGIN_NOTICE=1) : bool {
 
@@ -96,7 +99,7 @@ class clsAccount {
 	// ログイン ログアウト
 
 	/**
-	 * ログインする
+	 * ログインする (2段認証なし、もしくは、2段認証後)
 	 *
 	 * @param integer $APP_ID ログイン対象のアプリ
 	 * @param integer $ID_TYPE $ID_TYPE 1 e-mail 2 SMS 99 任意文字列 -1の場合、$ID_INFOから自動判別
@@ -106,7 +109,7 @@ class clsAccount {
 	 * @param string &$SESSION_CODE $useOAUthSessionTableがtrueの場合、セッション文字列を返す。
 	 * @return int ACCOUNT_IDを返す。取得出来なかった場合は 0
 	 */
-	function login(int $APP_ID, int $ID_TYPE, string $ID_INFO, string $PASS, bool $useOAUthSessionTable = true, string &$SESSION_CODE) : int {
+	function login(int $APP_ID, int $ID_TYPE=-1, string $ID_INFO, string $PASS, bool $useOAUthSessionTable = true, string &$SESSION_CODE = '') : int {
 
 		$this->useAccountDB();
 
@@ -115,15 +118,7 @@ class clsAccount {
 
 		try{
 			// $ID_TYPEがない場合は、$ID_INFOから判別
-			if ($ID_TYPE < 0){
-				if (isThis::email($ID_INFO)){
-					$ID_TYPE = 1;
-				}else if (isThis::int($ID_INFO, true)) {
-					$ID_TYPE = 2;
-				}else{
-					$ID_TYPE = 99;
-				}
-			}
+			$ID_TYPE = $this->judgeIdType($ID_TYPE, $ID_INFO);
 
 			// 2つのSQLでチェックするのは冗長だが、1SQLでのチェックに自信が無い＆テストデータもないので。
 			// 以下は1SQLでのチェック
@@ -147,18 +142,9 @@ class clsAccount {
 			if ($ACCOUNT_ID === null){ throw new \Exception('NO USER FOUND ON THE APP OR SQL ERROR'); }
 
 			if ($useOAUthSessionTable){
-				$USER_INFO = array ('IP'=> $_SERVER['REMOTE_ADDR']);
-				// SESSION_CODEが被らないように一応10回試す。
-				for ($i=0;$i < 10;$i++){
-					$SESSION_CODE = json_encode(hash("sha3-256", $APP_ID . $ACCOUNT_ID .  time() . random_bytes(32)));
-					$sql = 'INSERT INTO OAUTH_SESSION VALUES (APP_ID, ACCOUNT_ID, ACCESS_TOKEN, USER_INFO, EXPIRE_TIME, INSERT_TIME) VALUE (
-						' . $APP_ID . ', ' . $ACCOUNT_ID . ',"' . $SESSION_CODE . '","' . $USER_INFO . '", ADDDATE(now(), ' . $this->loginExpiredDays . '), now())';
-					$ret = $this->db->query($sql);
-					if ($ret){ break; }
-					if ($i == 9){ throw new \Exception('FAILED TO INSERT OAUTH_SESSION'); }
-				}
+				$error = $this->insertNewSessionRecord($APP_ID, $ACCOUNT_ID, $SESSION_CODE);
+				if ($error != ''){  throw new \Exception($error); }
 			}
-
 
 		}catch(\Exception $e){
 			$this->strError = $e->getMessage();
@@ -186,36 +172,86 @@ class clsAccount {
 	 * OAUTH_SESSIONテーブルを使い、ログイン中か調べる
 	 *
 	 * @param integer $APP_ID ログイン中か調べるAPP_ID
-	 * @param string $SESSION_CODE セッション
-	 * @param bool $bUpdateExpireDate ログイン中だった場合、有効期限を伸ばす場合はtrue
+	 * @param string $SESSION_CODE セッション $bUpdateSessionCodeの場合、変更の可能性あり。
+	 * @param bool $dayOfSessionUpdate 1より大きい場合、最後にOAUTH_SESSIONを更新してからこの日数経過していたら、$SESSION_CODEを別の値に書き換える。0で書き換え無し
+	 * @param bool $bUpdateExpireDate $loginExpiredDaysの半分以下の有効期限となっていた場合、有効期限を伸ばす場合はtrue
 	 * @return integer ログインしているaccountのID
 	 */
-	function isLogin(int $APP_ID, string $SESSION_CODE, bool $bUpdateExpireDate = true) : int{
+	function isLogin(int $APP_ID, string &$SESSION_CODE, int $dayOfSessionUpdate = 0, bool $bUpdateExpireDate = true) : int{
 
 		$this->useAccountDB();
 
 		$ACCOUNT_ID = 0;
 
 		try{
-			$sql = 'SELECT ACCOUNT_ID FROM OAUTH_SESSION
-			WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $this->db->real_escape_string($SESSION_CODE) . '" AND EXPIRE_TIME <= now()';
-			$ACCOUNT_ID = $this->db->getFirstOne($sql);
-			if ($ACCOUNT_ID === null){ throw new \Exception('Not Found the session'); }
 
-			// 有効期限を伸ばす
-			if ($bUpdateExpireDate){
-				$sql = 'UPDATE OAUTH_SESSION SET EXPIRE_TIME = ADDDATE(now(), ' . $this->loginExpiredDays . ')
-				WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $this->db->real_escape_string($SESSION_CODE) . '"';
+			// $SESSION_CODEは外部から渡される可能性があるので、一応エスケープしておく。
+			$escapeSESSION_CODE = $this->db->real_escape_string($SESSION_CODE);
 
+			$sql = 'SELECT ACCOUNT_ID, DATEDIFF(now(),LAST_CHECK_TIME), DATEDIFF(now(), EXPIRE_TIME) FROM OAUTH_SESSION
+			WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '" AND EXPIRE_TIME <= now()';
+			$SESSION_INFO = $this->db->getFirstRow($sql);
+			if ($SESSION_INFO === null){ throw new \Exception('Not Found the session'); }
+			$ACCOUNT_ID = $SESSION_INFO[0];
+			$daysFromLastChecked = abs($SESSION_INFO[1]);
+			$daysToExpire = abs($SESSION_INFO[2]);
+
+			// セッションコードを変更するか
+			if ($dayOfSessionUpdate > 0 && $daysFromLastChecked >= $dayOfSessionUpdate){
+
+				// 変更する
+				$error = $this->insertNewSessionRecord($APP_ID, $ACCOUNT_ID, $SESSION_CODE);
+				if ($error != ''){  throw new \Exception($error); }
+
+				// 現在のSESSIONは5分後に切れるようにする。
+				$sql = 'UPDATE OAUTH_SESSION SET EXPIRE_TIME = ADDTIME(now(), "0:5:0.0"), LAST_CHECK_TIME=now()
+				WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
 				$ret = $this->db->query($sql);
-				if (!$ret){ throw new \Exception('failed to update token'); }
+				if (!$ret){ throw new \Exception('failed to delete old session'); }
+
+			}else{
+				// 有効期限を伸ばす (伸ばす場合は、LAST_CHECK_TIMEも合わせて更新)
+				if ($bUpdateExpireDate && (floor($this->loginExpiredDays/2) > $daysToExpire) ){
+					$sql = 'UPDATE OAUTH_SESSION SET EXPIRE_TIME = ADDDATE(now(), ' . $this->loginExpiredDays . '), LAST_CHECK_TIME=now()
+					WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
+
+					$ret = $this->db->query($sql);
+					if (!$ret){ throw new \Exception('failed to update token'); }
+
+				// 通常の処理 LAST_CHECK_TIMEのみ更新
+				}else{
+					$sql = 'UPDATE OAUTH_SESSION SET LAST_CHECK_TIME=now()
+					WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
+				}
 			}
+
+
 		}catch(\Exception $e){
 			$this->strError = $e->getMessage();
 			$ACCOUNT_ID = 0;
 		}
 		$this->useOrgDB();
 		return $ACCOUNT_ID;
+	}
+
+	/**
+	 * セッション管理テーブルに指定のアカウントの新しいレコードを追加する。（isLoginでログイン状態になる。）
+	 *
+	 * @param integer $APP_ID アプリケーションの固有ID
+	 * @param integer $ACCOUNT_ID ユーザの固有アカウント
+	 * @return string エラー文言 エラーが無い場合は空文字
+	 */
+	function insertNewSessionRecord(int $APP_ID, int $ACCOUNT_ID, string &$SESSION_CODE = '') : string{
+		$USER_INFO = array ('IP'=> $_SERVER['REMOTE_ADDR']);
+		// SESSION_CODEが被らないように一応10回試す。
+		for ($i=0;$i < 10;$i++){
+			$NEW_SESSION_CODE = json_encode(hash("sha3-256", $APP_ID . $ACCOUNT_ID .  time() . random_bytes(32)));
+			$sql = 'INSERT INTO OAUTH_SESSION VALUES (APP_ID, ACCOUNT_ID, ACCESS_TOKEN, USER_INFO, LAST_CHECK_TIME, EXPIRE_TIME, INSERT_TIME) VALUE (
+				' . $APP_ID . ', ' . $ACCOUNT_ID . ',"' . $NEW_SESSION_CODE . '","' . $USER_INFO . '", now(), ADDDATE(now(), ' . $this->loginExpiredDays . '), now())';
+			$ret = $this->db->query($sql);
+			if ($ret){ $SESSION_CODE = $NEW_SESSION_CODE; return ''; }
+		}
+		return 'FAILED TO INSERT OAUTH_SESSION';
 	}
 
 	/**
@@ -229,6 +265,7 @@ class clsAccount {
 		$this->useOrgDB();
 		return $ret;
 	}
+
 
 	///////////////////////////////////////////////////////////////////////////
 	// 2FA認証関係
@@ -527,7 +564,7 @@ class clsAccount {
 	 * @return void
 	 */
 	protected function useAccountDB(){
-		if ($this->bChangeDB){ $this->db->select_db('account'); }
+		if ($this->bChangeDB){ $this->db->select_db(self::DEFAUL_DB_NAME); }
 	}
 
 	/**
@@ -537,6 +574,26 @@ class clsAccount {
 	 */
 	protected function useOrgDB(){
 		if ($this->bChangeDB){ $this->db->select_db($this->strBackDBName); }
+	}
+
+	/**
+	 * $ID_INFOからIDの種類（1 e-mail 2 SMS 99 任意文字列）を判別して返す。
+	 * $ID_TYPEが既に判別済みの場合は処理しない。
+	 *
+	 * @param int $ID_TYPE -1 の場合、$ID_INFOの内容から、emailかSMSか判別する。
+	 * @param string $ID_INFO ユーザID emailかSMSか文字列か
+	 * @return int 1 e-mail 2 SMS 99 任意文字列
+	 */
+	protected function judgeIdType(int $ID_TYPE, string $ID_INFO) :int{
+		if ($ID_TYPE > 0){ return $ID_TYPE; }
+
+		$ret = 99;
+		if (isThis::email($ID_INFO)){
+			$ret = 1;
+		}else if (isThis::phone($ID_INFO, true)) {
+			$ret = 2;
+		}
+		return $ret;
 	}
 
 }
