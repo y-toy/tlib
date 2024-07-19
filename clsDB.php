@@ -30,7 +30,7 @@ class clsDB extends \mysqli {
 
 	public function __construct(array $conf) {
 		if ($this->bConnected){ $this->close(); $this->bConnected = false; }
-		$this->logFolder = isset($conf['dbLogFolder'])?$conf['dbLogFolder']:'';
+		$this->logFolder = defined(TLIB_LOG)?TLIB_LOG:'';
 
 		try{
 			parent::__construct($conf['host'], $conf['user'], $conf['pass'], $conf['name'], $conf['port'], $conf['socket']);
@@ -42,7 +42,7 @@ class clsDB extends \mysqli {
 		if ($this->connect_errno){
 			$this->errorInfo = $this->connect_errno . ' : ' . $this->connect_error;
 			if ($this->logFolder != ''){
-				\tlib\util::vitalLogOut($this->logFolder, 3, $this->errorInfo);
+				\tlib\util::vitalLogOut(3, $this->errorInfo, $this->logFolder);
 			}
 		}
 		$this->bConnected = true;
@@ -161,7 +161,7 @@ class clsDB extends \mysqli {
 	private function whenQueryError($sql){
 		$this->errorInfo = $this->errno . ' : ' . $this->error . ' : ' . $sql;
 		if ($this->logFolder != ''){
-			\tlib\util::vitalLogOut($this->logFolder, 3, $this->errorInfo);
+			\tlib\util::vitalLogOut(3, $this->errorInfo, $this->logFolder);
 		}
 	}
 }

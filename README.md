@@ -1,26 +1,11 @@
 # tlib
-my php library
+my own library for php. It's not tested (not reliable).
 
-Don't use this lib. It's not tested (not reliable).
+Requirment :
+ - PHP 8.1 or higher
+ - pear Mail and Mail_MIME
+    > pear channel-update pear.php.net
+    > pear install -a Mail
+    > pear install -a Mail_MIME
 
-# you need composer to use this library.
-## composer install
-```
-mkdir ~/temp
-cd ~/temp
-php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-php composer-setup.php
-rm composer-setup.php
 
-mv composer.phar /usr/local/bin/composer
-chmod +x /usr/local/bin/composer
-```
-# run composer
-```
-composer install
-```
-
-# in php programs
-```
-include 'vendor/autoload.php'
-```

@@ -1,269 +1,378 @@
 <?php
 namespace tlib;
 
-include 'vendor/autoload.php';
+use Exception;
 
 /**
- * アカウント処理のベース アカウント関係のテーブル処理を行う。
- *  ・継承先は、簡易なログインとOAuthログインを想定。（OAuthは将来）
+ * アカウント関係のテーブル処理を行う。
+ *  ・継承先は、簡易なログインとOAuthログインを想定。（OAuthは保留）
  *  ・アカウントの個人情報は持たない。アカウント認証のみに特化させる。
  */
 class clsAccount {
 
-	protected ?clsDB $db = null;
+	public const MIN_USER_NAME_LENGTH = 2;
+	public const MAX_USE_NAME_LENGTH = 255;
+
+	public const MIN_PASSWORD_LENGTH = 8;
+	public const MAX_PASSWORD_LENGTH = 32;
+	public const PASSWORD_CHECK_MODE = 1; // at least digits and lowercase letters
+
+	public const MAX_AUTH_VERIFY_FAILED_COUNT = 5;
+
+	protected ?clsDB $db = null; // アカウント専用のDBを持つ場合は外部で対応のこと。
 	protected $loginExpiredDays = 0; // ログインのセッションの有効期限日数
-	protected $strError = ''; // エラーが発生した際にエラー内容を入れておくメンバ変数 基本英語
-	protected $bChangeDB = false; // 実行時にDBを変更する場合 true
-	protected $strAcntDBName = '';
-	protected $strBackDBName = ''; //  実行時にDBを変更する場合、処理後にDBを戻す名前
+	protected $strError = ''; // エラーが発生した際にエラー内容を入れておくメンバ変数
+	protected $msg = null;
 
 	///////////////////////////////////////////////////////////////////////////
 	// construct / destruct
 
-	public function __construct(clsDB &$db, int $loginExpiredDays = 365, bool $bChangeDB = false, string $strAcntDBName = 'account', string $strBackDBName=''){
+	public function __construct(clsDB &$db, int $loginExpiredDays = 365){
 		// 各引数の内容はメンバ変数参照
 		$this->db = $db;
 		$this->loginExpiredDays = $loginExpiredDays;
-		$this->bChangeDB = $bChangeDB;
-		$this->strAcntDBName = $strAcntDBName;
-		$this->strBackDBName = $strBackDBName;
+		$this->msg = clsLocale(get_class($this));
 	}
 
-	public function __destruct(){
-
-	}
+	public function __destruct(){}
 
 	///////////////////////////////////////////////////////////////////////////
 	// アカウント関係
 
 	/**
-	 * アカウント登録 2段認証後
+	 * アカウント登録
+	 * 　=> $TEMP_SESSION_KEYが指定された場合は2段階認証の結果チェックも行う。正しい認証コードであれば、AUTH_VERIFYからACCOUNT_INFO_VERIFIEDへのデータの移動も行う。
+	 * 　=> ログイン関連の設定は行わない（TFAを使用するかとログイン通知をするか。）ので、別関数で設定のこと。
+	 *   => checkAccountPara()をこの関数を呼び出す前に呼び出しエラーチェックすること。$ret = $this->checkAccountPara(0, $USER_NAME, $PASS);
 	 *
-	 * @param integer $APP_ID アカウント登録するAPP
-	 * @param integer $ID_TYPE 1 e-mail 2 SMS 99 任意文字列
-	 * @param string $ID_INFO ID_TYPE=1の場合 e-mail 2の場合 電話番号 99の場合任意文字列
-	 * @param string $PASS hash("sha3-256", "password")済みのデータ
-	 * @param integer $TFA ログインで2段階認証を行うか 1 行う 0 行わない
-	 * @param integer $LOGIN_NOTICE ログイン時に通知するか 1 する 0 しない
-	 * @return boolean false エラー true 登録完了
+	 * @param integer $APP_ID アカウント登録するAPP 0の場合は、アプリ登録無しでアカウントのみ作成
+	 * @param string $USER_NAME ユーザ名　$TEMP_SESSION_KEYを指定した場合は、AUTH_VERIFYのAUTH_INFOが使用される。
+	 * @param string $PASS パスワード 内部でハッシュ化
+	 * @param integer &$ACCOUNT_ID 登録が成功した場合に返されるアカウントID
+	 * @param string $TEMP_SESSION_KEY 指定された場合、AUTH_VERIFYで2段認証のチェックを行う。 空文字の場合は行わない。
+	 * @param string $VERIFY_CODE $TEMP_SESSION_KEYが指定された場合に2段認証のチェックで使用。
+	 *
+	 * @return int 0 正常終了 1 認証エラー 99 システムエラー
 	 */
-	public function addNewAccount(int $APP_ID, int $ID_TYPE, string $ID_INFO, string $PASS, int $TFA=1, int $LOGIN_NOTICE=1) : bool {
+	public function addAccount(int $APP_ID = 0, string $USER_NAME, string $PASS, int &$ACCOUNT_ID, string $TEMP_SESSION_KEY = '', string $VERIFY_CODE = '') : int {
 
-		$this->useAccountDB();
+		$this->strError = '';
+
+		$ACCOUNT_ID = 0;
+		$verifyInfo = array();
+
+		// 認証チェックする場合
+		if ($TEMP_SESSION_KEY != ''){
+			if (!$this->checkVerify($TEMP_SESSION_KEY, $VERIFY_CODE, $verifyInfo)){ return 1; } // $this->strErrorは内部で設定済み
+		}
 
 		// 新規登録
 		$this->db->autocommit(FALSE);
 
 		try{
-			// accountの登録
+
+			// 初期登録でメール登録などを行う場合は、USER_NAMEはメールアドレスかSMS
+			$USER_NAME_VERIFIED_ID = 0;
+			if ($TEMP_SESSION_KEY != ''){
+				$USER_NAME = $verifyInfo['AUTH_INFO'];
+				$USER_NAME_VERIFIED_ID = 1;
+			}
+
+			// ACCOUNT table
 			for ($i=0;$i < 10;$i++){
-				$ACCOUNT_ID_CHARS = hash('sha3-256', Date('YmdHis') . bin2hex(random_bytes(16)));;
-				$sql = 'INSERT INTO ACCOUNT (ACCOUNT_ID_CHARS, PASS, TFA, TFA_AUTH_ID, LOGIN_NOTICE, LOGIN_NOTICE_AUTH_ID, LAST_LOGIN_TIME, VALID, INSERT_TIME, UPDATE_TIME)
-					VALUES ("' . $ACCOUNT_ID_CHARS . '","' . $PASS . '", ' . $TFA . ', 1, ' . $LOGIN_NOTICE . ', 1, now(), 1, now(), now())';
+				$ACCOUNT_ID_CHARS = hash('sha3-256', Date('YmdHis') . bin2hex(random_bytes(16)));
+				$PASS = $this->hashPass($PASS);
+				$sql = 'INSERT INTO ACCOUNT (ACCOUNT_ID_CHARS, USER_NAME, PASS, USER_NAME_VERIFIED_ID, TFA_VERIFIED_ID, LOGIN_NOTICE_VERIFIED_ID, LOCKED, VALID, INSERT_TIME, UPDATE_TIME)
+					VALUES ("' . $ACCOUNT_ID_CHARS . '", "' . $this->db->real_escape_string($USER_NAME) . '", "' . $PASS . '", ' . $USER_NAME_VERIFIED_ID . ', 0, 0, 0, 1, now(), now())';
 				$ret = $this->db->query($sql);
 				if ($ret == true){ break; }
-				if ($i==9){ throw new \Exception('Failed to insert ACCOUNT table.'); }
+				if ($i==9){ throw new \Exception($this->msg->_('Failed to insert ACCOUNT table.')); }
 			}
 
 			$ACCOUNT_ID = $this->db->getFirstOne('SELECT LAST_INSERT_ID()');
 
-			// ACCOUNT_AUTHの登録 最初の登録なのでAUTH_IDは必ず１
-			$sql = 'INSERT INTO ACCOUNT_AUTH (ACCOUNT_ID, AUTH_ID, ID_TYPE, ID_INFO, INSERT_TIME, VALID)
-				VALUES (' . $ACCOUNT_ID . ', 1, ' . $ID_TYPE . ', "' . $ID_INFO . '", now(), 1)';
+			if ($TEMP_SESSION_KEY != ''){
+				if (!$this->moveVeryfyToAccount($ACCOUNT_ID, $TEMP_SESSION_KEY, $verifyInfo, false)){ throw new \Exception($this->strError); }
+			}
 
-			$ret = $this->db->query($sql);
-			if (!$ret){ throw new \Exception('Failed to insert ACCOUNT_AUTH table.'); }
-
-			// OAUTH_USER_PERMITの登録
-			$sql = 'INSERT INTO OAUTH_USER_PERMIT (APP_ID, ACCOUNT_ID, SCOPE) VALUES (' . $APP_ID . ',' . $ACCOUNT_ID . ',"")';
-			$ret = $this->db->query($sql);
-			if (!$ret){ throw new \Exception('Failed to insert OAUTH_USER_PERMIT table.'); }
+			// アプリケーションユーザとして登録
+			if ($APP_ID > 0){
+				if (!$this->addAccountToApp($APP_ID, $ACCOUNT_ID)){ throw new \Exception($this->msg->_('Failed to Add OAUTH_USER_PERMIT table.')); }
+			}
 
 		}catch(\Exception $e){
 			$this->db->rollback();
 			$this->db->autocommit(TRUE);
 			$this->strError = $e->getMessage();
 
-			$this->useOrgDB();
-			return false;
+			return 99;
 		}
 
 		$this->db->commit();
 		$this->db->autocommit(TRUE);
 
-		$this->useOrgDB();
+		return 0;
+	}
+
+
+	/**
+	 * アカウント情報を更新する。指定された修正情報の内、nullじゃないもののみDB更新。
+	 *  => ユーザ名、もしくは、パスワードを指定する場合は外部でcheckAccountPara()を呼びエラーをチェックすること。
+	 *     if (!is_null($USER_NAME) || !is_null($PASS)){
+	 *       $ret = $this->checkAccountPara($ACCOUNT_ID, $USER_NAME, $PASS);
+	 *     }
+	 *
+	 * @param integer $ACCOUNT_ID 修正するアカウント情報のID
+	 * @param string|null $USER_NAME ユーザ名 (ユーザ名を指定する場合は必ずパスワードも設定のこと。)
+	 * @param string|null $PASS パスワード（未ハッシュ）
+	 * @param int|null $TFA_VERIFIED_ID 2FAで使う認証済みの情報。TFAを使用しない場合は0。
+	 * @param int|null $LOGIN_NOTICE_VERIFIED_ID ログイン通知で使う認証済みの情報。ログイン通知を使用しない場合は0。
+	 * @param integer|null $LOCKED 一時的に使用不可とする場合1
+	 * @param integer|null $VALID 有効なアカウントの場合1 退会などの場合は0
+	 * @return integer 0 正常終了 1 引数エラー 99 システムエラー
+	 */
+	function modAccount(int $ACCOUNT_ID, ?string $USER_NAME = null, ?string $PASS = null, ?int $TFA_VERIFIED_ID = null, ?int $LOGIN_NOTICE_VERIFIED_ID = null, ?int $LOCKED = null, ?int $VALID = null) : int{
+
+		$this->strError = '';
+
+		///////////////////////////////////////////////////////////////////////
+		// 引数チェック
+
+		if ($ACCOUNT_ID == 0){ $this->strError = $this->msg->_('ACCOUNT_ID must be 1 or higher.'); return 1; }
+
+		// ユーザ名のみの指定はNG
+		if (!is_null($USER_NAME) && is_null($PASS)){ $this->strError = $this->msg->_('You need to specify your password when changing your account name.'); return 1; }
+
+		if ($LOCKED != 0 && $LOCKED != 1){ $this->strError = $this->msg->_('The "LOCKED" only accept 1 or 0.'); return 1; }
+		if ($VALID != 0 && $VALID != 1){ $this->strError = $this->msg->_('The "VALID" only accept 1 or 0.'); return 1; }
+
+		///////////////////////////////////////////////////////////////////////
+		// SQL実行
+
+		$sql = 'UPDATE ACCOUNT SET ';
+
+		if (!is_null($USER_NAME) && !is_null($PASS)){
+			$sql .= ' USER_NAME = "' . $this->db->real_escape_string($USER_NAME) . '", PASS = "' . $this->hashPass($PASS) . '",';
+		}
+
+		if (is_null($USER_NAME) && !is_null($PASS)){
+			$sql .= ' PASS = "' . $this->hashPass($PASS) . '",';
+		}
+
+		if (!is_null($TFA_VERIFIED_ID)){ $sql .= ' TFA_VERIFIED_ID = ' . $TFA_VERIFIED_ID . ','; } // 2段認証の設定をする
+		if (!is_null($LOGIN_NOTICE_VERIFIED_ID)){ $sql .= ' TFA_VERIFIED_ID = ' . $LOGIN_NOTICE_VERIFIED_ID . ','; } // ログイン時の通知先の設定をする
+		if (!is_null($LOCKED)){ $sql .= ' LOCKED = ' . $LOCKED . ','; } // 不正利用などでロックする場合1
+		if (!is_null($VALID) ){ $sql .= ' VALID = ' . $VALID . ','; } // 大会などでアカウント停止する場合0
+
+		$sql = substr($sql, 0, -1); // 最後の,を取り除く
+		$sql .= ' WHERE ACCOUNT_ID = ' . $ACCOUNT_ID;
+
+		$ret = $this->db->query($sql);
+		if ($ret === false){
+			$this->strError = $this->msg->_('SYSTEM ERROR : FAILED TO MODIFY THE INFORMATION.');
+			return 99;
+		}
+
+		return 0;
+	}
+
+	/**
+	 * 指定のアカウント関係を全て削除する。
+	 *
+	 * @param integer $ACCOUNT_ID
+	 * @return bool 正常終了 true 異常終了 false
+	 */
+	function delAccount(int $ACCOUNT_ID) : bool{
+
+		$this->strError = '';
+
+		// アカウントがあるかチェック
+		$sql = 'SELECT COUNT(*) FROM ACCOUNT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID;
+		$cnt = $this->db->getFirstOne($sql);
+		if (is_null($cnt) || $cnt <= 0){ $this->strError = $this->msg->_('Could not find your account.'); return false; }
+
+		$this->db->autocommit(FALSE);
+
+		try{
+			$ret = $this->db->query('DELETE FROM ACCOUNT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 01')); }
+
+			$ret = $this->db->query('DELETE FROM ACCOUNT_INFO_VERIFIED WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 02')); }
+
+			$ret = $this->db->query('DELETE FROM AUTH_VERIFY WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 03')); }
+
+			$ret = $this->db->query('DELETE FROM AUTH_VERIFY WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 04')); }
+
+			$ret = $this->db->query('DELETE FROM OAUTH_USER_PERMIT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 05')); }
+
+			$ret = $this->db->query('DELETE FROM OAUTH_CODE_SESSION WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 06')); }
+
+			$ret = $this->db->query('DELETE FROM OAUTH_SESSION WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 07')); }
+
+			$ret = $this->db->query('DELETE FROM ACCOUNT_SESSION WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 08')); }
+
+			$ret = $this->db->query('DELETE FROM ACCOUNT_ACTIVITY WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 09')); }
+
+		}catch(Exception $e){
+			$this->db->rollback();
+			$this->db->autocommit(true);
+
+			$this->strError = $e->getMessage();
+			return false;
+		}
+
+		$this->db->commit();
+		$this->db->autocommit(true);
+
 		return true;
 	}
 
-	///////////////////////////////////////////////////////////////////////////
-	// ログイン ログアウト
-
 	/**
-	 * ログインする (2段認証なし、もしくは、2段認証後)
+	 * ユーザ名とパスワードが妥当か調べる
 	 *
-	 * @param integer $APP_ID ログイン対象のアプリ
-	 * @param integer $ID_TYPE $ID_TYPE 1 e-mail 2 SMS 99 任意文字列 -1の場合、$ID_INFOから自動判別
-	 * @param string $ID_INFO ID_TYPE=1の場合 e-mail 2の場合 電話番号 99の場合任意文字列
-	 * @param string $PASS 平文のパス
-	 * @param bool $useOAUthSessionTable trueの場合OAUTH_SESSIONテーブルにセッションを設定し、$SESSION_CODEにセッション文字列を設定する。
-	 * @param string &$SESSION_CODE $useOAUthSessionTableがtrueの場合、セッション文字列を返す。
-	 * @return int ACCOUNT_IDを返す。取得出来なかった場合は 0
+	 * @param integer $ACCOUNT_ID 通常は0指定 >0でここで指定されたアカウントを除外して調べる。
+	 * @param string $USER_NAME nullの場合はチェックせず
+	 * @param string $PASS nullの場合はチェックせず
+	 * @return integer 	0 問題なし
+	 * 					1 ユーザ名が短すぎる
+	 * 					2 ユーザ名が長すぎる
+	 * 					3 パスワードが短すぎる
+	 * 					4 パスワードが長すぎる
+	 * 					5 パスワードに数字しか含まれない
+	 * 					6 パスワードに数字がない
+	 * 					7 パスワードに小文字がない
+	 * 					8 パスワードに大文字がない
+	 * 					9 パスワードに記号がない
+	 * 					10 パスワードが使用済み
+	 * 					90 ユーザ名もパスワードも未指定
+	 * 					91 ユーザ名のみの変更にはパスワードが必要
+	 * 					99 DBエラー　システムエラー
 	 */
-	function login(int $APP_ID, int $ID_TYPE=-1, string $ID_INFO, string $PASS, bool $useOAUthSessionTable = true, string &$SESSION_CODE = '') : int {
+	function checkAccountPara(int $ACCOUNT_ID, ?string $USER_NAME, ?string $PASS) : int{
 
-		$this->useAccountDB();
+		$this->strError = '';
 
-		$SESSION_CODE = '';
-		$ACCOUNT_ID = 0;
+		// ユーザ名もパスワードも指定されない場合はエラー
+		if (is_null($USER_NAME) && is_null($PASS)){ $this->strError = $this->msg->_('You need to specify USER_NAME or PASS.'); return 90; }
 
-		try{
-			// $ID_TYPEがない場合は、$ID_INFOから判別
-			$ID_TYPE = $this->judgeIdType($ID_TYPE, $ID_INFO);
+		// ユーザ名のみの変更の場合は、パスワード必須
+		if (!is_null($USER_NAME) && is_null($PASS)){ $this->strError = $this->msg->_('You need to specify your password when changing your user name.'); return 91; }
 
-			// 2つのSQLでチェックするのは冗長だが、1SQLでのチェックに自信が無い＆テストデータもないので。
-			// 以下は1SQLでのチェック
-			// $sql = 'SELECT OUP.ACCOUNT_ID FROM OAUTH_USER_PERMIT AS OUP
-			// LEFT JOIN ACCOUNT_AUTH AS AA ON OUP.ACCOUNT_ID = AA.ACCOUNT_ID
-			// LEFT JOIN ACCOUNT AS ACT ON OUP.ACCOUNT_ID = ACT.ACCOUNT_ID
-			// WHERE OUP.APP_ID = ' . $APP_ID . ' AND AA.ID_TYPE=' . $ID_TYPE . ' AND AA.ID_INFO ="' . $this->db->real_escape_string($ID_INFO) . '" AND ACT.PASS ="' . $this->hashPass($PASS) . '"';
+		$passMinLen = ((defined(TLIB_MIN_PASSWORD_LENGTH))?TLIB_MIN_PASSWORD_LENGTH:self::MIN_PASSWORD_LENGTH);
+		$passMaxLen = ((defined(TLIB_MAX_PASSWORD_LENGTH))?TLIB_MAX_PASSWORD_LENGTH:self::MAX_PASSWORD_LENGTH);
+		$passMode = ((defined(TLIB_PASSWORD_CHECK_MODE))?TLIB_PASSWORD_CHECK_MODE:self::PASSWORD_CHECK_MODE);
 
-			// $ACCOUNT_ID = $this->db->getFirstOne($sql);
-			// if ($ACCOUNT_ID === null){ throw new Exception('FAILED AUTH'); }
-
-			$sql = 'SELECT AA.ACCOUNT_ID FROM ACCOUNT_AUTH AS AA
-			LEFT JOIN ACCOUNT AS ACT ON AA.ACCOUNT_ID = ACT.ACCOUNT_ID
-			WHERE AA.ID_TYPE=' . $ID_TYPE . ' AND AA.ID_INFO ="' . $this->db->real_escape_string($ID_INFO) . '" AND ACT.PASS ="' . $this->hashPass($PASS) . '"';
-			$aryAccountId = $this->db->getArrayClm($sql);
-			if ($aryAccountId === null){ throw new \Exception('FAILED TO CHECK ACCOUNT_AUTH SQL ERROR AUTH'); }
-			if (count($aryAccountId) == 0){ throw new \Exception('NO USER FOUND'); }
-
-			$sql = 'SELECT ACCOUNT_ID FROM OAUTH_USER_PERMIT WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID IN (' . implode(',',$aryAccountId) . ')';
-			$ACCOUNT_ID = $this->db->getFirstOne($sql);
-			if ($ACCOUNT_ID === null){ throw new \Exception('NO USER FOUND ON THE APP OR SQL ERROR'); }
-
-			if ($useOAUthSessionTable){
-				$error = $this->insertNewSessionRecord($APP_ID, $ACCOUNT_ID, $SESSION_CODE);
-				if ($error != ''){  throw new \Exception($error); }
-			}
-
-		}catch(\Exception $e){
-			$this->strError = $e->getMessage();
-			$ACCOUNT_ID = 0;
+		if (!is_null($USER_NAME)){
+			if (mb_strlen($USER_NAME) < self::MIN_USER_NAME_LENGTH){ $this->strError = $this->msg->_('Your user name is too short.'); return 1; }
+			if (mb_strlen($USER_NAME) > self::MAX_USER_NAME_LENGTH){ $this->strError = $this->msg->_('Your user name is too long.');return 2; }
 		}
-
-		$this->useOrgDB();
-		return (int)$ACCOUNT_ID;
-	}
-
-	/**
-	 * OAUTH_SESSIONの当該行を削除する。
-	 *
-	 * @param string $SESSION_CODE
-	 * @return boolean
-	 */
-	function logout(string $SESSION_CODE) : bool {
-		$this->useAccountDB();
-		$ret = $this->db->query('DELETE FROM OAUTH_SESSION WHERE ACCESS_TOKEN = "' .  $this->db->real_escape_string($SESSION_CODE) . '"');
-		$this->useOrgDB();
-		return $ret;
-	}
-
-	/**
-	 * OAUTH_SESSIONテーブルを使い、ログイン中か調べる
-	 *
-	 * @param integer $APP_ID ログイン中か調べるAPP_ID
-	 * @param string $SESSION_CODE セッション $bUpdateSessionCodeの場合、変更の可能性あり。
-	 * @param bool $dayOfSessionUpdate 1より大きい場合、最後にOAUTH_SESSIONを更新してからこの日数経過していたら、$SESSION_CODEを別の値に書き換える。0で書き換え無し
-	 * @param bool $bUpdateExpireDate $loginExpiredDaysの半分以下の有効期限となっていた場合、有効期限を伸ばす場合はtrue
-	 * @return integer ログインしているaccountのID
-	 */
-	function isLogin(int $APP_ID, string &$SESSION_CODE, int $dayOfSessionUpdate = 0, bool $bUpdateExpireDate = true) : int{
-
-		$this->useAccountDB();
-
-		$ACCOUNT_ID = 0;
-
-		try{
-
-			// $SESSION_CODEは外部から渡される可能性があるので、一応エスケープしておく。
-			$escapeSESSION_CODE = $this->db->real_escape_string($SESSION_CODE);
-
-			$sql = 'SELECT ACCOUNT_ID, DATEDIFF(now(),LAST_CHECK_TIME), DATEDIFF(now(), EXPIRE_TIME) FROM OAUTH_SESSION
-			WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '" AND EXPIRE_TIME <= now()';
-			$SESSION_INFO = $this->db->getFirstRow($sql);
-			if ($SESSION_INFO === null){ throw new \Exception('Not Found the session'); }
-			$ACCOUNT_ID = $SESSION_INFO[0];
-			$daysFromLastChecked = abs($SESSION_INFO[1]);
-			$daysToExpire = abs($SESSION_INFO[2]);
-
-			// セッションコードを変更するか
-			if ($dayOfSessionUpdate > 0 && $daysFromLastChecked >= $dayOfSessionUpdate){
-
-				// 変更する
-				$error = $this->insertNewSessionRecord($APP_ID, $ACCOUNT_ID, $SESSION_CODE);
-				if ($error != ''){  throw new \Exception($error); }
-
-				// 現在のSESSIONは5分後に切れるようにする。
-				$sql = 'UPDATE OAUTH_SESSION SET EXPIRE_TIME = ADDTIME(now(), "0:5:0.0"), LAST_CHECK_TIME=now()
-				WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
-				$ret = $this->db->query($sql);
-				if (!$ret){ throw new \Exception('failed to delete old session'); }
-
-			}else{
-				// 有効期限を伸ばす (伸ばす場合は、LAST_CHECK_TIMEも合わせて更新)
-				if ($bUpdateExpireDate && (floor($this->loginExpiredDays/2) > $daysToExpire) ){
-					$sql = 'UPDATE OAUTH_SESSION SET EXPIRE_TIME = ADDDATE(now(), ' . $this->loginExpiredDays . '), LAST_CHECK_TIME=now()
-					WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
-
-					$ret = $this->db->query($sql);
-					if (!$ret){ throw new \Exception('failed to update token'); }
-
-				// 通常の処理 LAST_CHECK_TIMEのみ更新
-				}else{
-					$sql = 'UPDATE OAUTH_SESSION SET LAST_CHECK_TIME=now()
-					WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
+		if (!is_null($PASS)){
+			$ret = isThis::password($PASS, $passMinLen, $passMaxLen, $passMode);  // 0 正常 1 短すぎる 2 長すぎる 3 数字のみエラー 4 数字なし 5 小文字なし 6 大文字なし 7 記号無し
+			if ($ret > 0){
+				switch($ret){
+					case 1 : $this->strError = $this->msg->_('Your password is too short.'); break;
+					case 2 : $this->strError = $this->msg->_('Your password is too long.'); break;
+					case 3 : $this->strError = $this->msg->_('Please include some letters other than numbers in your password..'); break;
+					case 4 : $this->strError = $this->msg->_('Please include some numbers in your password.'); break;
+					case 5 : $this->strError = $this->msg->_('Please put lowercase letters in your password.'); break;
+					case 6 : $this->strError = $this->msg->_('Please put uppercase letters in your password.'); break;
+					case 7 : $this->strError = $this->msg->_('Please put a symbol in the password.'); break;
+					default:
+					$this->strError = $this->msg->_('Unknown error occured when checking your password.');
 				}
+
+				return ($ret + 2); // 3 ～ 9
 			}
-
-
-		}catch(\Exception $e){
-			$this->strError = $e->getMessage();
-			$ACCOUNT_ID = 0;
 		}
-		$this->useOrgDB();
-		return $ACCOUNT_ID;
+
+		// パスワードのみが指定された場合は、変更後の同じユーザ／パスワードがいなかチェック ($ACCOUNT_ID == 0)の場合もエラー
+		if (is_null($USER_NAME) && !is_null($PASS)){
+			if ($ACCOUNT_ID == 0){ return 99; } // イレギュラーすぎるのでエラーになればなんでも良い。
+
+			$sql = 'SELECT USER_NAME FROM ACCOUNT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID;
+			$USER_NAME = $this->db->getFirstOne($sql);
+			if (is_null($USER_NAME)){ $this->strError = $this->msg->_('SYSTEM ERROR : PROBABLY WRONG ACCOUNT ID.'); return 99; } // イレギュラーすぎるのでエラーになればなんでも良い。
+
+		 }
+
+		// 既に使われているユーザとパスワードの場合はNG
+		$sql = 'SELECT COUNT(*) FROM ACCOUNT WHERE USER_NAME = "' . $this->db->real_escape_string($USER_NAME) . '" AND PASS = "' . $this->hashPass($PASS) . '"';
+		if ($ACCOUNT_ID != 0){ $sql .= ' AND ACCOUNT_ID <> ' . $ACCOUNT_ID; }
+		$exists = $this->db->getFirstOne($sql);
+		if ($exists === null){ $this->strError = $this->msg->_('SYSTEM ERROR : COULD NOT FIND YOUR INFORMATION.'); return 99; } // システムエラー
+		if ($exists > 0){ $this->strError = $this->msg->_('Not allowed to use the password.'); return 10; }
+
+		return 0;
+	}
+
+	///////////////////////////////////////////////////////////////////////////
+	// アプリ登録／削除 (アカウントは登録済みであること)
+
+	/**
+	 * アプリにアカウントを登録する。
+	 *
+	 * @param integer $APP_ID
+	 * @param integer $ACCOUNT_ID
+	 * @return bool true 正常 false 異常
+	 */
+	function addAccountToApp(int $APP_ID, int $ACCOUNT_ID) : bool{
+		// 既に登録済み？
+		$cnt = $this->db->getFirstOne('SELECT COUNT(*) FROM OAUTH_USER_PERMIT WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID);
+		if ($cnt == null){ return false; }
+		if ($cnt > 0){ return true; } // 既に登録済みならそれはそれで良い。
+
+		return $this->db->query('INSERT INTO OAUTH_USER_PERMIT (APP_ID, ACCOUNT_ID, SCOPE) VALUES (' . $APP_ID . ', ' . $ACCOUNT_ID . ' , "[]")');
 	}
 
 	/**
-	 * セッション管理テーブルに指定のアカウントの新しいレコードを追加する。（isLoginでログイン状態になる。）
+	 * アプリからアカウントを削除する。
+	 *  => 登録アプリが0になる場合はアカウント毎の削除となるため注意のこと。
 	 *
-	 * @param integer $APP_ID アプリケーションの固有ID
-	 * @param integer $ACCOUNT_ID ユーザの固有アカウント
-	 * @return string エラー文言 エラーが無い場合は空文字
+	 * @param integer $APP_ID
+	 * @param integer $ACCOUNT_ID
+	 * @return bool true 正常 false 異常
 	 */
-	function insertNewSessionRecord(int $APP_ID, int $ACCOUNT_ID, string &$SESSION_CODE = '') : string{
-		$USER_INFO = array ('IP'=> $_SERVER['REMOTE_ADDR']);
-		// SESSION_CODEが被らないように一応10回試す。
-		for ($i=0;$i < 10;$i++){
-			$NEW_SESSION_CODE = json_encode(hash("sha3-256", $APP_ID . $ACCOUNT_ID .  time() . random_bytes(32)));
-			$sql = 'INSERT INTO OAUTH_SESSION VALUES (APP_ID, ACCOUNT_ID, ACCESS_TOKEN, USER_INFO, LAST_CHECK_TIME, EXPIRE_TIME, INSERT_TIME) VALUE (
-				' . $APP_ID . ', ' . $ACCOUNT_ID . ',"' . $NEW_SESSION_CODE . '","' . $USER_INFO . '", now(), ADDDATE(now(), ' . $this->loginExpiredDays . '), now())';
-			$ret = $this->db->query($sql);
-			if ($ret){ $SESSION_CODE = $NEW_SESSION_CODE; return ''; }
-		}
-		return 'FAILED TO INSERT OAUTH_SESSION';
-	}
+	function dellAccountFromApp(int $APP_ID, int $ACCOUNT_ID) : bool{
 
-	/**
-	 * 期限切れのSESSIONを削除する。
-	 *
-	 * @return boolean
-	 */
-	function deleteExpiredSession() : bool {
-		$this->useAccountDB();
-		$ret = $this->db->query('DELETE FROM OAUTH_SESSION WHERE EXPIRE_TIME <= now()');
-		$this->useOrgDB();
-		return $ret;
+		// 存在する？
+		$cnt = $this->db->getFirstOne('SELECT COUNT(*) FROM OAUTH_USER_PERMIT WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID);
+		if ($cnt == null){ return false; }
+		if ($cnt == 0){ return true; } // 存在しないならそれはそれで良い
+
+		// 削除したら登録アプリ数が0になる？
+		$cnt = $this->db->getFirstOne('SELECT COUNT(*) FROM OAUTH_USER_PERMIT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
+		if ($cnt == null){ return false; }
+		if ($cnt == 1){ return $this->delAccount($ACCOUNT_ID); } // 0になる場合はアカウント毎削除
+
+		$this->db->autocommit(FALSE);
+
+		try{
+
+			$ret = $this->db->query('DELETE FROM OAUTH_USER_PERMIT  WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception(); }
+			$ret = $this->db->query('DELETE FROM OAUTH_CODE_SESSION WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception(); }
+			$ret = $this->db->query('DELETE FROM OAUTH_SESSION      WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception(); }
+			$ret = $this->db->query('DELETE FROM ACCOUNT_SESSION    WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception(); }
+			$ret = $this->db->query('DELETE FROM ACCOUNT_ACTIVITY   WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception(); }
+
+		}catch(Exception $e){
+			$this->db->rollback();
+			$this->db->autocommit(true);
+
+			return false;
+		}
+
+		$this->db->commit();
+		$this->db->autocommit(true);
+
+		return true;
 	}
 
 
@@ -273,149 +382,158 @@ class clsAccount {
 	/**
 	 * 認証開始
 	 *
-	 * @param int $APP_ID 認証を使うAPPのID
 	 * @param integer $ACCOUNT_ID アカウントのID 0の場合 未登録ユーザ
-	 * @param integer $ID_TYPE 1 e-mail 2 SMS 99 任意文字列
-	 * @param string $ID_INFO $ID_TYPE=1の場合 e-mail 2の場合 電話番号 99の場合任意文字列
-	 * @param string $PASS 平文パスワード $ACCOUNT_ID=0の場合必須 それ以外は無視 (DBにはNULL設定)
-	 * @param string &$VERIFY_CODE 認証コード（返却）
-	 * @param string &$TEMP_SESSION_KEY セッションキー（返却）
-	 * @param boolean &$bAuthExists 既に登録済みである場合、trueを返す。（戻り値がfalseの場合チェック この場合認証不要）
-	 * @return boolean
+	 * @param integer $AUTH_TYPE 1 e-mail 2 SMS
+	 * @param string $AUTH_INFO $ID_TYPE=1の場合 e-mail 2の場合 電話番号
+	 * @param string $VERIFY_CODE 認証コード（返却）
+	 * @param string $TEMP_SESSION_KEY セッションキー（返却）
+	 * @param boolean $bAuthExists 既に登録済みである場合、trueを返す。（戻り値はtrueの場合チェック この場合、指定されたメールアドレス／SMSにユーザ名を送るなど処理をする必要あり。）
+	 * @return boolean true 正常終了 false 異常終了
 	 */
-	public function startVerify(int $APP_ID, int $ACCOUNT_ID, int $ID_TYPE, string $ID_INFO, string $PASS, string &$VERIFY_CODE, string &$TEMP_SESSION_KEY, bool &$bAuthExists) : bool{
+	public function startVerify(int $ACCOUNT_ID = 0, int $AUTH_TYPE, string $AUTH_INFO, string &$VERIFY_CODE, string &$TEMP_SESSION_KEY, bool &$bAuthExists) : bool{
 
-		$this->useAccountDB();
+		$bAuthExists = false;
 
 		try{
-			$bAuthExists = false;
-
-			// 10分以内に3回以上同じID登録は怪しいので一旦NGにする。
-			$sql = 'SELECT COUNT(*) FROM AUTH_VERIFY WHERE ID_INFO = "' . $ID_INFO . '" AND INSERT_TIME >= now() - INTERVAL 10 MINUTE';
-			$cnt = $this->db->getFirstOne($sql);
-			if ($cnt === null){ throw new \Exception('AUTH_VERIFY CHECK SQL ERROR'); }
-			if ($cnt >= 3){ throw new \Exception('TOO MUCH VERIFY'); }
-
 
 			// 既に認証済みではないか確認
-			$sql = 'SELECT COUNT(*) FROM OAUTH_USER_PERMIT AS OUP
-				LEFT JOIN ACCOUNT_AUTH AS AAUTH ON OUP.ACCOUNT_ID = AAUTH.ACCOUNT_ID
-				WHERE OUP.APP_ID = ' . $APP_ID . ' AND AAUTH.ID_TYPE = ' . $ID_TYPE . ' AND AAUTH.ID_INFO = "' .  $ID_INFO . '"';
+			$sql = 'SELECT COUNT(*) FROM ACCOUNT_INFO_VERIFIED WHERE AUTH_TYPE = ' . $AUTH_TYPE . ' AND AUTH_INFO = "' . $this->db->real_escape_string($AUTH_INFO) . '"';
 			$cnt = $this->db->getFirstOne($sql);
-			if ($cnt === null){ throw new \Exception('OAUTH_USER_PERMIT CHECK SQL ERROR'); }
+			if ($cnt === null){ throw new \Exception($this->msg->_('SYSTEM ERROR : failed to check the TFA information exists.')); }
 			if ($cnt > 0){
-				// 既に認証済み
+				// 既に認証済み => メールアドレス／SMSにユーザ名を送る。
 				$bAuthExists = true;
-				throw new \Exception('ALREADY AUTHED');
+				return true;
 			}
 
-			// 認証開始
-			if ($ACCOUNT_ID == 0){
-				if ($PASS == ''){throw new \Exception('NOT SET PASS'); }
-				$PASS = $this->hashPass($PASS);
-			}
-
-			$VERIFY_CODE = random_int(100000, 999999); // とりあえず6桁
-			// $TEMP_SESSION_KEYが被ってNGになるかもしれないので、5回繰り返す。
+			$VERIFY_CODE = random_int(10000000, 99999999); // とりあえず8桁
+			// $TEMP_SESSION_KEYが被ってNGになるかもしれないので、10回繰り返す。
 			$inserted = false;
-			for ($i=0;$i < 4;$i++){
-				$TEMP_SESSION_KEY = hash('sha3-256', $ID_INFO . bin2hex(random_bytes(16)));
-				$sql = 'INSERT INTO AUTH_VERIFY (ACCOUNT_ID, ID_TYPE, ID_INFO, VERIFY_CODE, TEMP_SESSION_KEY, PASS, IP_ADDRESS, AUTHED_CNT, EXPIRE_TIME, INSERT_TIME)
-				VALUES (' . $ACCOUNT_ID . ', ' . $ID_TYPE . ', "' . $ID_INFO . '", "' . $VERIFY_CODE . '", "' . $TEMP_SESSION_KEY . '", ' . (($ACCOUNT_ID==0)?'"' . $PASS . '"':'NULL') . ', INET6_ATON("' . $_SERVER['REMOTE_ADDR'] . '"), 0,now() + INTERVAL 30 MINUTE, now())';
+			for ($i=0;$i < 10;$i++){
+				$TEMP_SESSION_KEY = hash(TLIB_HASH_ALGO_PASS, date('YYYYmmddhhiiss') . TLIB_HASH_SOLT . $AUTH_INFO . bin2hex(random_bytes(16)));
+				$sql = 'INSERT INTO AUTH_VERIFY (ACCOUNT_ID, AUTH_TYPE, AUTH_INFO, VERIFY_CODE, TEMP_SESSION_KEY, FAILED_CNT, EXPIRE_TIME, INSERT_TIME)
+				VALUES (' . $ACCOUNT_ID . ', ' . $AUTH_TYPE . ', "' . $AUTH_INFO . '", "' . $VERIFY_CODE . '", "' . $TEMP_SESSION_KEY . '", 0, now() + INTERVAL 30 MINUTE, now())';
 				$ret = $this->db->query($sql);
 				if ($ret === true){ $inserted = true; break; }
 			}
 			if (!$inserted){
-				throw new \Exception('FAILED TO INSERT AUTH_VERIFY');
+				throw new \Exception($this->msg->_('SYSTEM ERROR : FAILED TO INSERT AUTH_VERIFY'));
 			}
 
 		}catch(\Exception $e){
 			$this->strError = $e->getMessage();
-			$this->useOrgDB();
 			return false;
 		}
 
-		$this->useOrgDB();
 		return true;
 	}
 
 	/**
 	 * 認証をチェックする。
-	 * チェックが問題なければ、以下。新規登録の場合、ログイン済みとなっているので注意。
-	 * 当該チェック認証のACCOUNT_ID = 0であれば、ユーザ新規登録（ACCOUNTとACCOUNT_AUTHに追加）
-	 * 当該チェック認証のACCOUNT_ID > 0であれば、ACCOUNT_AUTHに追加
 	 *
-	 * @param int $APP_ID
-	 * @param string $TEMP_SESSION_KEY
-	 * @param string $VERIFY_CODE
-	 * @return boolean
+	 * @param string $TEMP_SESSION_KEY セッションキー
+	 * @param string $VERIFY_CODE チェックするコード
+	 * @param array AUTH_VERIFYのレコード情報戻し用 色々使うので。
+	 * @return boolean true false
 	 */
-	function checkVerify(int $APP_ID, string $TEMP_SESSION_KEY, string $VERIFY_CODE) : bool{
-
-		$this->useAccountDB();
+	function checkVerify(string $TEMP_SESSION_KEY, string $VERIFY_CODE, ?array &$verifyInfo) : bool{
 
 		try{
 
-			$sql = 'SELECT * FROM AUTH_VERIFY WHERE TEMP_SESSION_KEY = "' . $TEMP_SESSION_KEY . '"';
-			$row = $this->db->getFirstRowAssoc($sql);
-			if ($row === null){ throw new \Exception('TEMP_SESSION_KEY DOES NOT EXISTS'); }
+			$ESCAPE_TEMP_SESSION_KEY = $this->db->real_escape_string($TEMP_SESSION_KEY);
+			$sql = 'SELECT * FROM AUTH_VERIFY WHERE TEMP_SESSION_KEY = "' . $ESCAPE_TEMP_SESSION_KEY . '" AND EXPIRE_TIME >= now() AMD FAILED_CNT <= ' . self::MAX_AUTH_VERIFY_FAILED_COUNT;
+			$verifyInfo = $this->db->getFirstRowAssoc($sql);
 
-			// 10回失敗していたら攻撃
-			if ($row['VERIFY_CODE'] > 10){ throw new \Exception('CONSIDER ATTACKED'); }
+			// セッションが見つからないか有効期限エラー
+			if ($verifyInfo == null){ throw new \Exception($this->msg->_('Could not find the user session. Probably the authentication time has expired.')); }
 
-			if ($row['VERIFY_CODE'] != $VERIFY_CODE){
-				$sql = 'UPDATE AUTH_VERIFY SET AUTHED_CNT = AUTHED_CNT+1 WHERE TEMP_SESSION_KEY = "' . $TEMP_SESSION_KEY . '"';
-				$this->db->query($sql);
-				throw new \Exception('VERIFY_CODE NOT MUCH');
-			}
+			// 認証回数エラー
+			if ($verifyInfo['FAILED_CNT'] >= self::MAX_AUTH_VERIFY_FAILED_COUNT){ throw new \Exception($this->msg->_('Too many times to enter the code.')); }
 
-			if ($row['ACCOUNT_ID'] == 0){
-
-				// 新規登録
-				$ret = $this->addNewAccount($APP_ID, (int)$row['ID_TYPE'], $row['ID_INFO'], $row['PASS'], 1, 1);
-				if (!$ret){ throw new \Exception('Failed to Add account : ' . $this->getError()); }
-
-				// 上記関数ないで元のDBに戻されるので、
-				$this->useAccountDB();
-
-			}else{
-				// 認証情報追加 同一人物内の+1なので被ることはまずないし、被ったら当人がわかるはず
-				$sql = 'SELECT MAX(AUTH_ID) + 1 FROM ACCOUNT_AUTH WHERE ACCOUNT_ID = ' . $row['ACCOUNT_ID'];
-				$nextAuthId = $this->db->getFirstOne($sql);
-				if ($nextAuthId == null){ throw new \Exception('FAILED TO GET NEXT ID'); }
-
-				// ACCOUNT_AUTHの登録
-				$sql = 'INSERT INTO ACCOUNT_AUTH (ACCOUNT_ID, AUTH_ID, ID_TYPE, ID_INFO, INSERT_TIME, VALID)
-					VALUES (' . $row['ACCOUNT_ID'] . ', ' . $nextAuthId . ', ' . $row['ID_TYPE'] . ', "' . $row['ID_INFO'] . '", now(), 1)';
-
+			// 認証エラー
+			if ($verifyInfo['VERIFY_CODE'] != $VERIFY_CODE){
+				$sql = 'UPDATE AUTH_VERIFY SET FAILED_CNT = FAILED_CNT+1 WHERE TEMP_SESSION_KEY = "' . $ESCAPE_TEMP_SESSION_KEY . '"';
 				$ret = $this->db->query($sql);
-				if (!$ret){ throw new \Exception('FAILED TO INSERT ACCOUNT_AUTH'); }
-			}
+				if ($ret === false){ throw new \Exception($this->msg->_('SYSTEM ERROR : DB ACCESS FAILED.')); }
 
-			// 認証出来たら、当該行を削除
-			$sql = 'DELETE FROM AUTH_VERIFY WHERE TEMP_SESSION_KEY = "' . $TEMP_SESSION_KEY . '"';
-			$this->db->query($sql);
+				throw new \Exception($this->msg->_('Wrong code specifyed via two facter authentication.'));
+			}
 
 		}catch(\Exception $e){
 			$this->strError = $e->getMessage();
-			$this->useOrgDB();
 			return false;
 		}
 
-		$this->useOrgDB();
 		return true;
 	}
 
 	/**
+	 * AUTH_VERIFY => ACCOUNT_INFO_VERIFIEDへの移動。移動後、AUTH_VERIFY側のデータは削除する。
+	 * 事前に$this->checkVerify()を呼び出しエラーないことを確認すること。
+	 *
+	 * @param integer $ACCOUNT_ID
+	 * @param string $TEMP_SESSION_KEY
+	 * @param boolean $bUseTransaction
+	 * @return boolean true 正常終了 false 異常終了
+	 */
+	function moveVeryfyToAccount(int $ACCOUNT_ID, string $TEMP_SESSION_KEY, ?array $verifyInfo=null, bool $bUseTransaction = false) : bool{
+
+		// 必要情報の取得
+		$ESCAPE_TEMP_SESSION_KEY = $this->db->real_escape_string($TEMP_SESSION_KEY);
+		if ($verifyInfo == null){
+			$sql = 'SELECT AUTH_TYPE, AUTH_INFO FROM AUTH_VERIFY WHERE TEMP_SESSION_KEY = "' . $ESCAPE_TEMP_SESSION_KEY . '"';
+			$verifyInfo = $this->db->getFirstRowAssoc($sql);
+			// セッションが見つからない
+			if ($verifyInfo == null){ $this->strError = $this->msg->_('Could not find the user session.'); return false; }
+		}
+
+		$sql = 'SELECT COUNT(*) FROM ACCOUNT_INFO_VERIFIED WHERE ACCOUNT_ID = ' . $ACCOUNT_ID;
+		$VERIFIED_ID = $this->db->getFirstOne($sql);
+		if ($VERIFIED_ID == null){  $this->strError = $this->msg->_('SYSTEM ERROR : FAILED TO GET ACCOUNT_INFORMATION.'); return false; }
+
+		if ($bUseTransaction){
+			$this->db->autocommit(FALSE);
+		}
+
+		try{
+
+			// AUTH_VERIFYからACCOUNT_INFO_VERIFIEDへのデータの移動
+			$sql = 'INSERT INTO ACCOUNT_INFO_VERIFIED (ACCOUNT_ID, VERIFIED_ID, VERIFIED_INFO_TYPE, VERIFIED_INFO, VALID, LAST_VALID_TIME, INSERT_TIME)
+				VALUES (' . $ACCOUNT_ID . ', ' . ($VERIFIED_ID+1) . ', ' . $verifyInfo['AUTH_TYPE'] . ', "' . $verifyInfo['AUTH_INFO'] . '", 1, now(), now())';
+			$ret = $this->db->query($sql);
+			if (!$ret){ throw new \Exception($this->msg->_('SYSTEM ERROR : Failed to insert ACCOUNT_INFO_VERIFIED table.')); }
+
+			// AUTH_VERIFYの削除
+			$sql = 'DELETE FROM AUTH_VERIFY WHERE TEMP_SESSION_KEY = "' . $ESCAPE_TEMP_SESSION_KEY . '"';
+			$ret = $this->db->query($sql);
+			if (!$ret){ throw new \Exception($this->msg->_('SYSTEM ERROR : Failed to DELETE AUTH_VERIFY table.')); }
+
+		}catch(Exception $e){
+
+			if ($bUseTransaction){
+				$this->db->rollback();
+				$this->db->autocommit(true);
+			}
+
+			$this->strError = $e->getMessage();
+			return false;
+		}
+
+		if ($bUseTransaction){
+			$this->db->commit();
+			$this->db->autocommit(TRUE);
+		}
+
+		return true;
+	}
+
+
+	/**
 	 * 認証テーブル定期削除用
 	 *
-	 * @return void
+	 * @return bool true(正常) / false
 	 */
-	function delVerifyRowAuto(){
-		$this->useAccountDB();
-		$this->db->query('DELETE FROM AUTH_VERIFY WHERE EXPIRE_TIME <= now()');
-		$this->useOrgDB();
-	}
+	function delVerifyExpired() : bool{ return $this->db->query('DELETE FROM AUTH_VERIFY WHERE EXPIRE_TIME <= now()'); }
 
 	///////////////////////////////////////////////////////////////////////////
 	// アプリ関係（OAUTH_APPLICATION）
@@ -441,8 +559,6 @@ class clsAccount {
 			'APP_NAME' => $appName,
 			'APP_LOGIN_TITLE' => $appTittle), JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
 		$SCOPE = JSON_ENCODE(array(), JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
-
-		$this->useAccountDB();
 
 		try{
 
@@ -481,11 +597,9 @@ class clsAccount {
 
 		}catch(\Exception $e){
 			$this->strError = $e->getMessage();
-			$this->useOrgDB();
 			return false;
 		}
 
-		$this->useOrgDB();
 		return true;
 	}
 
@@ -498,8 +612,6 @@ class clsAccount {
 	 * @return boolean
 	 */
 	public function modAppInfoWithID(int|string $APP_INDEX, array $appName /*= array('jp'=>'','en'=>'')*/, array $appTittle /*= array('jp'=>'','en'=>'')*/) : bool {
-
-		$this->useAccountDB();
 
 		$APP_INFO = JSON_ENCODE(array(
 			'APP_NAME' => $appName,
@@ -514,7 +626,6 @@ class clsAccount {
 
 		$ret = $this->db->query($sql);
 
-		$this->useOrgDB();
 		return $ret;
 	}
 	/**
@@ -525,8 +636,6 @@ class clsAccount {
 	 */
 	public function delApp(int|string $APP_INDEX) : bool {
 
-		$this->useAccountDB();
-
 		$sql = 'DELETE FROM OAUTH_APPLICATION';
 		if (gettype($APP_INDEX) == 'integer'){
 			$sql .= ' WHERE APP_ID = ' . $APP_INDEX;
@@ -536,7 +645,6 @@ class clsAccount {
 
 		$ret = $this->db->query($sql);
 
-		$this->useOrgDB();
 		return $ret;
 	}
 
@@ -544,11 +652,11 @@ class clsAccount {
 	// utility
 
 	/**
-	 * あればエラー内容を返す。
+	 * エラー内容を返す。
 	 *
 	 * @return string
 	 */
-	public function getError() : string { return $this->strError; }
+	public function getErrorMsg() : string { return $this->strError; }
 
 	/**
 	 * パスワードをハッシュする。
@@ -556,24 +664,10 @@ class clsAccount {
 	 * @param string $pass 平文のパスワード
 	 * @return string ハッシュされたパスワード
 	 */
-	protected function hashPass(string $pass) : string{ return hash('sha3-256', $pass); }
-
-	/**
-	 * account dbに切り替える
-	 *
-	 * @return void
-	 */
-	protected function useAccountDB(){
-		if ($this->bChangeDB){ $this->db->select_db(self::DEFAUL_DB_NAME); }
-	}
-
-	/**
-	 * 元のDBに切り替える
-	 *
-	 * @return void
-	 */
-	protected function useOrgDB(){
-		if ($this->bChangeDB){ $this->db->select_db($this->strBackDBName); }
+	protected function hashPass(string $pass) : string{
+		$solt = (defined('TLIB_HASH_SOLT')?TLIB_HASH_SOLT:'');
+		$algos = (defined('TLIB_HASH_ALGO_PASS')?TLIB_HASH_ALGO_PASS:'sha3-256');
+		return hash($algos, $solt + $pass);
 	}
 
 	/**

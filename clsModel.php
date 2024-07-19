@@ -56,7 +56,12 @@ class myModel {
 			$this->clmsCount = $ret->num_rows;
 			for($i=0;$i<$this->clmsCount;$i++) {
 				$row = $ret->fetch_row();
-				$this->clms[] = array($row[0], $this->convClmType($row[1]), ($row[3] == 'PRI'), (strpos($row[5], 'auto_increment') !== false));
+				$this->clms[] = array(
+					$row[0], /* カラム名 */
+					$this->convClmType($row[1]),  /* カラム型 */
+					($row[3] == 'PRI'), /* プライマリキーかどうか */
+					(strpos($row[5], 'auto_increment') !== false) /* auto_incrementかどうか */
+				);
 			}
 			if ($bUseAPCu && $this->clmsCount > 0){
 				apcu_store($this->tablename, $this->clms);
@@ -364,7 +369,11 @@ class myModel {
 			$this->val[$this->priClms[0][0]] = $this->getNextNewId();
 		}
 
+		$ret = $this->insertCore();
+
 		if ($bGetMaxIndex && $bLock){ $this->db->unlockTables(); }
+
+		return $ret;
 
 	}
 

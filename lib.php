@@ -5,6 +5,8 @@ namespace tlib;
 /// 共通関数 ///
 ////////////////////////////////////////////////////////////////////////////////
 
+// locale poファイル作成用 tlib_lib.poが翻訳ファイルとなる。
+class lib{}
 
 /*****************************************************************************/
 /*** POST/GET 取得 ***/
@@ -238,8 +240,8 @@ class myDate {
 	/**
 	 * 日付の差分（日数）を求める abs($dateB - $dateA)
 	 *
-	 * @param string $dateA YYYY-MM-DD or YYYY-MM-DD hh:ii:ss
-	 * @param string $dateB YYYY-MM-DD or YYYY-MM-DD hh:ii:ss
+	 * @param string $dateA YYYY-MM-DD or YYYY-MM-DD hh:ii:ss (hh:ii:ssは無視される)
+	 * @param string $dateB YYYY-MM-DD or YYYY-MM-DD hh:ii:ss (hh:ii:ssは無視される)
 	 * @return int 日数
 	 */
 	function dateDiffAbs(string $dateA, string $dateB) : int { return floor(abs(self::strToDate($dateB) - self::strToDate($dateA)) / 86400) + 1; }
@@ -328,15 +330,15 @@ class isThis {
 		// Loop through each digit and do the maths
 		$total=0;
 		for ($i=0; $i<$number_length; $i++) {
-		$digit=$number[$i];
-		// Multiply alternate digits by two
-		if ($i % 2 == $parity) {
-			$digit*=2;
-			// If the sum is two digits, add them together (in effect)
-			if ($digit > 9) { $digit-=9; }
-		}
-		// Total up the digits
-		$total+=$digit;
+			$digit=$number[$i];
+			// Multiply alternate digits by two
+			if ($i % 2 == $parity) {
+				$digit*=2;
+				// If the sum is two digits, add them together (in effect)
+				if ($digit > 9) { $digit-=9; }
+			}
+			// Total up the digits
+			$total+=$digit;
 		}
 
 		// If the total mod 10 equals 0, the number is valid
@@ -356,6 +358,41 @@ class isThis {
 		if ($str == ''){ return true; } // 何もないのはOK
 		return (preg_match("/^[\x20-\x7E]+$/", $str));
 	}
+
+	/**
+	 * パスワードチェック
+	 *
+	 * @param string $pass チェックするパスワード
+	 * @param integer $minLen パスワードの最小の長さ
+	 * @param integer $maxLen パスワードの最長の長さ 0で制限なし
+	 * @param integer $mode 0 どんな文字でもOK 1 数字と小文字アルファベット 2 数字と大文字・小文字 3 数字と大文字・小文字と記号()
+	 * @return integer 0 正常 1 短すぎる 2 長すぎる 3 数字のみエラー 4 数字なし 5 小文字なし 6 大文字なし 7 記号無し
+	 */
+	static function password(string $pass, int $minLen, int $maxLen, int $mode) : int{
+
+		$passLen = mb_strlen($pass);
+		if ($passLen < $minLen){ return 1; }
+		if ($maxLen != 0 && $passLen > $maxLen){ return 2; }
+
+		// なんでもOK
+		if ($mode == 0){ return 0; }
+
+		if (preg_match('/^[0-9]+$/', $pass)){ return 3; } // 全部数字はNG
+		if (!preg_match('/[0-9]/', $pass)){ return 4; } // 数字を含まない
+		if (!preg_match('/[a-z]/', $pass)){ return 5; } // 小文字を含まない
+
+		// 数字とアルファベットを含んでいたらOK
+		if ($mode == 1){ return 0; }
+
+		if (!preg_match('/[A-Z]/', $pass)){ return 6; } // 大文字を含まない
+
+		// 数字と小文字大文字を含んでいたらOK
+		if ($mode == 2){ return 0; }
+
+		if (!ctype_alnum($pass)){ return 7; } // 記号を含まない
+
+		return 0;
+	}
 }
 
 /*****************************************************************************/
@@ -365,7 +402,7 @@ class isThis {
 class priceCalc {
 
 	/**
-	 * 内税の場合の税金計算（税込み額から税額を計算 小数点以下四捨五入：rental側にあわせる。）
+	 * 内税の場合の税金計算（税込み額から税額を計算 小数点以下四捨五入）
 	 *
 	 * @param int $price 税込み金額
 	 * @param string $baseDate 'yyyy-mm-dd' or 'yyyy-mm-dd hh:mm:ss' 計算の基準日 税率の変更があった場合に使用。
@@ -383,7 +420,7 @@ class priceCalc {
 	}
 
 	/**
-	 * 外税の場合の税金計算（税込み額から税額を計算 小数点以下四捨五入：rental側にあわせる。）
+	 * 外税の場合の税金計算（税抜き額から税額を計算 小数点以下四捨五入）
 	 *
 	 * @param int $price 税抜き金額
 	 * @param string $baseDate 'yyyy-mm-dd' or 'yyyy-mm-dd hh:mm:ss' 計算の基準日 税率の変更があった場合に使用。
@@ -593,8 +630,8 @@ class util{
 	static function vitalLogOut(int $level, string $message, string $outFolder = ''){
 
 		if ($outFolder == ''){
-			if (isset($GLOBALS['tlib_log'])){
-				$outFolder = $GLOBALS['tlib_log'];
+			if (defined(TLIB_LOG)){
+				$outFolder = TLIB_LOG;
 			}else{
 				$outFolder = __DIR__ . '/logs/';
 			}
