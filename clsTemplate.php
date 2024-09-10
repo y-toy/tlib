@@ -5,13 +5,15 @@
  * 変数:
  *   $this->param['hoge'] = value;
  * テンプレートファイル：
- *   1234 <?php {echo $v['hoge']} ?> 5678
+ *   1234 <?= $v['hoge'] ?> 5678
  * 結果：
  *   1234 value 5678
  */
 class clsTemplate {
 
 	public array $param;
+
+	function set(string $key, $value) : void { $this->param[$key] = $value; }
 	function clear(){ unset($this->param); }
 
 	function getTemplateResult(string $tplFile) : string{

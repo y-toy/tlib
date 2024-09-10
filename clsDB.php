@@ -108,7 +108,7 @@ class clsDB extends \mysqli {
 
 	// 検索結果の特定カラムのみで配列化し返す。
 	// エラー時はFALSEを返す。
-	public function getArrayClm(string $sql, int $clm=0) : null|array {
+	public function getTheClmArray(string $sql, int $clm=0) : null|array {
 		$res = $this->query($sql);
 		if ($res === FALSE){ $this->whenQueryError($sql); return null; }
 		$aryRet = array();

@@ -12,7 +12,7 @@ DROP TABLE IF EXISTS ACCOUNT;
 CREATE TABLE IF NOT EXISTS ACCOUNT(
 	ACCOUNT_ID BIGINT UNSIGNED AUTO_INCREMENT comment 'ユーザ識別',
 	ACCOUNT_ID_CHARS VARCHAR(128) UNIQUE comment 'hash("see your config file", datetime+fixed-solt+randam(32)) ユーザID識別子 必ず英数混在（OAUTHなどでACCOUNT_IDの数値を外に出したくない場合用）',
-	USER_NAME VARCHAR(255) NOT NULL comment 'ユーザ名 基本はメールアドレスの予定',
+	USER_NAME VARCHAR(255) NOT NULL comment 'ユーザ名 基本はメールアドレス / 電話番号の予定',
 	PASS VARCHAR(128) NOT NULL comment 'パスワード hash("see your config file", "password" + fixed-solt)',
 	USER_NAME_VERIFIED_ID INT UNSIGNED DEFAULT 0 comment 'ACCOUNT_INFO_VERIFIED::VERIFIED_ID USER_NAMEがメールアドレスや電話番号の場合に指定。0ならメールでもSMSでもない',
 	TFA_VERIFIED_ID INT UNSIGNED NOT NULL comment 'ACCOUNT_INFO_VERIFIED::VERIFIED_ID 2FAで使う認証済みの情報。TFAを使用しない場合は0。',
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS AUTH_VERIFY(
 	AUTH_INFO VARCHAR(255) DEFAULT '' comment 'メールアドレスやSMS電話番号など、AUTH_TYPEによって入れる認証情報',
 	VERIFY_CODE CHAR(8) NOT NULL comment '認証コード 8桁の数字とする',
 	TEMP_SESSION_KEY CHAR(128) NOT NULL UNIQUE comment 'hash(TLIB_HASH_ALGO_SESS, datetime+fixed-solt+random_bytes(32))',
+	ADDITIONAL_INFO JSON default '' comment '認証後に使用する追加の情報 認証前の入力済みユーザ名など',
 	FAILED_CNT INT UNSIGNED default 0 COMMENT "認証にトライした数 攻撃チェック 5回失敗で終了",
 	EXPIRE_TIME DATETIME NOT NULL comment '有効期限 登録期限 + 30分 認証後この情報を流用する場合に備え、認証後は12時間延長',
 	INSERT_TIME DATETIME NOT NULL comment '登録時間',
@@ -59,7 +60,7 @@ CREATE TABLE IF NOT EXISTS AUTH_VERIFY(
 )engine=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -------------------------------------------------------------------------------
---- アプリケーション登録用 ---
+--- アプリケーション登録用 (使わない) ---
 -------------------------------------------------------------------------------
 
 -- OAUTH用 登録されたアプリケーション
@@ -70,7 +71,7 @@ CREATE TABLE IF NOT EXISTS OAUTH_APPLICATION(
 	APP_ID_SECRET CHAR(64) comment 'bin2hex(random_bytes(32)) ログイン パスワード',
 	SITE_URL TEXT default '' comment 'アプリのURL あれば',
 	APP_INFO JSON default '' comment '{"APP_NAME" : {"ja":xxxx, "en":xxxxx}, "APP_LOGIN_TITLE" : {"ja":xxxx, "en":xxxxx}}',
-	SCOPE JSON comment 'SCOPE対象の名前の羅列 ["EMAIL","NAME",等] 使わない',
+	SCOPE JSON comment 'SCOPE対象の名前の羅列 ["EMAIL","NAME",等] 一応準備はしておくが使わない',
 	PRIMARY KEY (APP_ID),
 	INDEX INDEX_APP_ID_CHARS (APP_ID_CHARS),
 	CHECK (JSON_VALID(SCOPE))
@@ -104,28 +105,13 @@ CREATE TABLE IF NOT EXISTS OAUTH_SESSION(
 	ACCOUNT_ID BIGINT unsigned comment 'ACCOUNT::ACCOUNT_ID',
 	ACCESS_TOKEN VARCHAR(128) UNIQUE comment 'hash("TLIB_HASH_ALGO_SESS", APP_ID + ACCOUNT_ID + time + fixed-solt + random_bytes(32)) APPから求められた時に返すACCESS_TOKEN',
 	USER_INFO JSON comment 'ログイン時のユーザの情報{IP:"", COUNTRY:"", etc..} 現状IPのみ',
-	EXPIRE_TIME DATETIME DEFAULT NULL comment '1年ぐらい NULLの場合は期限なし',
+	LAST_CHECK_TIME DATETIME NOT NULL comment 'ACCESS_TOKENを指定期間で変更する場合に利用する ずっと同じセッションを使わないという配慮',
+	EXPIRE_TIME DATETIME DEFAULT NULL comment '1年ぐらい NULLの場合は期限なし ログインチェックのたびに延長',
 	INSERT_TIME DATETIME NOT NULL comment 'セッション登録時',
 	PRIMARY KEY (ACCESS_TOKEN),
 	INDEX INDEX_ACCOUNT_ID (ACCOUNT_ID),
 	INDEX INDEX_APP_ID_ACCESS_TOKEN (APP_ID, ACCESS_TOKEN)
 )engine=InnoDB DEFAULT CHARSET=utf8mb4;
-
--------------------------------------------------------------------------------
---- セッション管理 各アプリ側でやるのもOK ---
--------------------------------------------------------------------------------
-
-DROP TABLE IF EXISTS ACCOUNT_SESSION;
-CREATE TABLE IF NOT EXISTS ACCOUNT_SESSION(
-	APP_ID BIGINT unsigned AUTO_INCREMENT comment 'D_APPLICATION::APP_ID',
-	ACCOUNT_ID BIGINT unsigned comment 'ACCOUNT::ACCOUNT_ID',
-	SESSION_KEY VARCHAR(128) NOT NULL UNIQUE comment 'hash("TLIB_HASH_ALGO_SESS", APP_ID + ACCOUNT_ID + time + fixed-solt + random_bytes(32))',
-	EXPIRE_TIME DATETIME DEFAULT NULL comment '1年ぐらい NULLの場合は期限なし',
-	INSERT_TIME DATETIME NOT NULL comment 'セッション登録時',
-	INDEX INDEX_APP_ID_ACCOUNT_ID (APP_ID, ACCOUNT_ID),
-	INDEX INDEX_APP_ID (APP_ID),
-	INDEX INDEX_SESSION_KEY (SESSION_KEY)
-) engine=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -------------------------------------------------------------------------------
 --- 他 ---

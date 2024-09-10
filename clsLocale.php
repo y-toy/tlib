@@ -78,16 +78,22 @@ class clsLocale {
 
 	protected $domainName = '';
 	protected $localeFolder = '';
+	protected $localeLang = ''; // en jaなど2文字
 
 	/**
 	 * コンストラクタ
 	 *
 	 * @param string $className get_class($this)
+	 * @param string $localFolder ロケールフォルダー 指定しない場合、configやこのクラスのconst値が使われる。クラスやその他によってフォルダを分けたい場合は利用。
 	 */
-	public function __construct(string $className){
+	public function __construct(string $className, string $localFolder=''){
 		// namesapce対応
 		$this->domainName = str_replace('\\','_',$className);
-		$this->localeFolder = self::getLocaleFolder();
+		if ($localFolder == ''){
+			$this->localeFolder = self::getLocaleFolder();
+		}else{
+			$this->localeFolder = $localFolder;
+		}
 
 		bindtextdomain($this->domainName, $this->localeFolder);
 	}
@@ -110,12 +116,17 @@ class clsLocale {
 
 	/**
 	 * ロケールを設定する。
-	 * 引数の$setLocalに指定が無い場合、ブラウザの設定かシステムの設定から言語を特定して設定する。
+	 * 引数の$setLocalが''の場合、ブラウザの設定かシステムの設定から言語を特定して設定する。
 	 *
-	 * @param string $setLocal 設定するロケール
+	 * setLocale($setLocale)
+	 * $lang = substr($setLocal, 0, 2);でja / enが取れる
+	 *
+	 * @param string $setLocal 設定するロケール / 終了時は設定したロケール
 	 * @return boolean false / true
 	 */
-	static function setLocale(string $setLocal = ''):bool{
+	static function setLocale(?string &$setLocal):bool{
+
+		if ($setLocal == null){ $setLocal = ''; }
 
 		$acceptLangs = ((defined('TLIB_ACCEPT_LANGS')? TLIB_ACCEPT_LANGS : self::DEFAULT_ACCEPT_LANGS));
 		$defaultLang = ((defined('TLIB_DEFAULT_LANG')? TLIB_DEFAULT_LANG : self::DEFAULT_LANG));
@@ -133,6 +144,7 @@ class clsLocale {
 				}
 			}
 			//putenv('LANG=' . $trueSetLocaleName);
+			$setLocal = $trueSetLocaleName;
 			return setlocale(LC_ALL, $trueSetLocaleName);
 		}
 

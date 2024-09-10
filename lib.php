@@ -5,8 +5,65 @@ namespace tlib;
 /// 共通関数 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-// locale poファイル作成用 tlib_lib.poが翻訳ファイルとなる。
-class lib{}
+// ログインチェックのみ
+class lib {
+
+	/**
+	 * OAUTH_SESSIONテーブルを使い、ログイン中か調べる
+	 *
+	 * @param clsDB $db アカウント用のDBオブジェクト
+	 * @param integer $APP_ID ログイン中か調べるAPP_ID
+	 * @param string $SESSION_CODE セッション $bUpdateSessionCodeの場合、変更の可能性あり。
+	 * @param bool $dayOfSessionUpdate 最後にSESSIONコードを更新してからこの日数経過していたら、$SESSION_CODEを別の値に書き換える。ついでに有効期限も延長する。　0で書き換え無し
+	 * @param bool $bUpdateExpireDate $loginExpiredDaysの半分以下の有効期限となっていた場合、有効期限を伸ばす場合はtrue
+	 * @return integer ログインしているaccountのID ログインしていない場合は0
+	 */
+
+	static function isLogin(clsDB $db, int $APP_ID, string &$SESSION_CODE, int $dayOfSessionUpdate = 1, bool $bUpdateExpireDate = true) : int{
+
+		// $SESSION_CODEは外部から渡される可能性があるので、一応エスケープしておく。
+		$escapeSESSION_CODE = $db->real_escape_string($SESSION_CODE);
+
+		$sql = 'SELECT ACCOUNT_ID, DATEDIFF(now(),LAST_CHECK_TIME), DATEDIFF(now(), EXPIRE_TIME) FROM OAUTH_SESSION
+		WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '" AND EXPIRE_TIME <= now()';
+		$SESSION_INFO = $db->getFirstRow($sql);
+		if ($SESSION_INFO === null){ return 0; }
+		$ACCOUNT_ID = $SESSION_INFO[0];
+		$daysFromLastChecked = abs($SESSION_INFO[1]);
+		$daysToExpire = abs($SESSION_INFO[2]);
+
+		// ここから先の処理はついでなので、エラーでも処理自体は止めない。エラーはログ出力する。
+
+		// セッションコードを変更するか
+		if ($dayOfSessionUpdate > 0 && $daysFromLastChecked >= $dayOfSessionUpdate){
+
+			// 変更する　ついでなので期限も延長
+			for ($i=0;$i < 10;$i++){
+				$NEW_SESSION_CODE = lib::getSessionHashCode($APP_ID, $ACCOUNT_ID);
+				$sql = 'UPDATE OAUTH_SESSION SET ACCESS_TOKEN = "' . $NEW_SESSION_CODE . '", EXPIRE_TIME=ADDDATE(now(), ' . TLIB_LOGIN_EXPIRE_DAYS . '), LAST_CHECK_TIME=now() WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
+				$ret = $db->query($sql);
+				if (!$ret && $i >= 9){ vitalLogOut(__METHOD__ . ' : ' . $sql); }
+			}
+
+		}else{
+			// 有効期限を伸ばす (伸ばす場合は、LAST_CHECK_TIMEも合わせて更新)
+			if ($bUpdateExpireDate && (floor(TLIB_LOGIN_EXPIRE_DAYS/2) > $daysToExpire) ){
+				$sql = 'UPDATE OAUTH_SESSION SET EXPIRE_TIME = ADDDATE(now(), ' . TLIB_LOGIN_EXPIRE_DAYS . '), LAST_CHECK_TIME=now()
+				WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
+			// 通常の処理 LAST_CHECK_TIMEのみ更新
+			}else{
+				$sql = 'UPDATE OAUTH_SESSION SET LAST_CHECK_TIME=now() WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
+			}
+			$ret = $db->query($sql);
+			if (!$ret){ vitalLogOut(__METHOD__ . ' : ' . $sql); }
+		}
+
+		return $ACCOUNT_ID;
+	}
+
+	static function getSessionHashCode(int $APP_ID, int $ACCOUNT_ID) : string{ return hash(TLIB_HASH_ALGO_SESS, $APP_ID . $ACCOUNT_ID .  time() . TLIB_HASH_SOLT . random_bytes(32)); }
+
+}
 
 /*****************************************************************************/
 /*** POST/GET 取得 ***/
