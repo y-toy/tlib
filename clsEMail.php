@@ -1,4 +1,5 @@
 <?php
+namespace tlib;
 
 include_once("Mail.php");
 include_once("Mail/mime.php");
@@ -12,7 +13,7 @@ include_once("Mail/mime.php");
  *
  * ■ 基本の使い方
  *
- * $obj = new clsEMail('mx.some.jp', 587, 'smtpuser', 'password'); // 後から、$obj->setServerInfo()に設定も可能
+ * $obj = new clsEMail('mx.some.jp', 587, 'smtpuser', 'password'); // サーバ情報は$obj->setServerInfo()を使って設定も可能
  * $obj->setFromAddress('My Name', 'myAddress@some.jp');
  * $obj->setToAddress('friendA@gmail.com', 'Friend A');
  * $obj->setToAddress('friendB@gmail.com', 'Friend B'); // 複数宛先は繰り返しコールする。 CC/BCC/ファイル添付などはクラス内参照。
@@ -155,7 +156,7 @@ class clsEMail {
 	 * @param boolean $bQmail dovecotではない場合はtrue
 	 * @param array $headers $this->sendHTMLCoreで取得したメッセージのヘッダ
 	 * @param string $body $this->sendHTMLCoreで取得した本文内容
-	 * @param string $flag imap_appendに指定する保存フラグ
+	 * @param string $flag imap_appendに指定する保存フラグ "\\Seen \\Flagged"のように指定 \Seen、 \Answered、\Flagged、 \Deleted および \Draft
 	 * @return string 正常時は'' 異常時は異常メッセージ
 	 */
 	function saveMessageToFolder(string $imapServer, string $folderName, bool $bTLS, bool $bQmail, array $headers, string $body, string $flag = ''):string{
@@ -178,7 +179,7 @@ class clsEMail {
 	 * @param boolean $bTLS TLSを使うかどうか。ポートが993(TLS)か143かの指定。
 	 * @param boolean $bQmail dovecotではない場合はtrue
 	 * @param string $message 保管するメッセージ
-	 * @param string $flag imap_appendに指定する保存フラグ
+	 * @param string $flag imap_appendに指定する保存フラグ "\\Seen \\Flagged"のように指定  \Seen、 \Answered、\Flagged、 \Deleted および \Draft
 	 * @return string 正常時は'' 異常時は異常メッセージ
 	 */
 	function saveMessageToFolderCore(string $imapServer, string $folderName, bool $bTLS, bool $bQmail, string $message, string $flag = '') : string{
@@ -187,9 +188,12 @@ class clsEMail {
 		//$encodeFolder = imap_utf7_decode(mb_convert_encoding($folderName, 'UTF7-IMAP', 'UTF-8'));
 		$encodeFolder = mb_convert_encoding($folderName, 'UTF7-IMAP', 'UTF-8');
 
-		$port = 143;
-		if ($bTLS){ $port = 993; }
-		$path = "{" . $imapServer . ":" . $port . "/imap/ssl}" . (($bQmail)?'INBOX.':'') . $encodeFolder;
+		$path = '';
+		if ($bTLS){
+			$path = "{" . $imapServer . ":993/imap/ssl}" . (($bQmail)?'INBOX.':'') . $encodeFolder;
+		}else{
+			$path = "{" . $imapServer . ":143/imap/notls}" . (($bQmail)?'INBOX.':'') . $encodeFolder;
+		}
 
 		$imapStream = imap_open($path, $this->smtp_user, $this->smtp_pass);
 		if ($imapStream === FALSE){ return FALSE; }
@@ -198,6 +202,11 @@ class clsEMail {
 		if ($result === false){
 			$strError = imap_last_error();
 		}
+
+		// prevent errors from being displayed
+		imap_errors();
+		imap_alerts();
+
 		imap_close($imapStream);
 		return $strError;
 	}

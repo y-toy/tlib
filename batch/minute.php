@@ -7,8 +7,8 @@ if (!file_exists($configFilePath)){
 	$configFilePath = __DIR__ . '/../config_sample.php';
 }
 include_once $configFilePath;
-include_once TLIB_ROOT . 'clsAccountBase.php';
+include_once TLIB_ROOT . 'clsOAuth2.php';
 
-$objAccount = new clsAccountBase();
-$objAccount->delVerifyExpired();
+$objOAuth2 = new clsOAuth2($db);
+$objOAuth2->deleteExpiredRecords();
 

@@ -96,7 +96,7 @@ class clsLocale {
 			if ($error == ''){
 				$this->getLangFileContents(); // 読み込み
 			}else{
-				vitalLogOut(3, $domainName . ' : Failed to update lang files : ' . $error);
+				util::vitalLogOut(3, $domainName . ' : Failed to update lang files : ' . $error);
 			}
 		}
 	}

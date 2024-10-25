@@ -64,7 +64,25 @@ namespace tlib;
  *
  * clsLocale::makePoFiles("/xxxx/xxxx/project/","/xxxx/xxxx/project/locale/");
  *
+ *
  */
+// 必要なdefine
+// define('TLIB_LOCALE_FILE_PATH', TLIB_ROOT . 'locale/'); // locale folder
+// define('TLIB_LOCALE_FILE_PATH_FOR_TLIB_CLASSES', TLIB_ROOT . 'locale/'); // locale folder for tlib classes
+// define('TLIB_DEFAULT_LANG', 'en_US.utf8'); // DEFAULT LANGUAGE when it could not be determined from the environment
+// define('TLIB_ACCEPT_LANGS', array(
+// 	'en' => 'en_US.utf8', // langcode => system locale code. you can see the system locale code list using command "locale -a" in UBUNTU.
+// 	'ja' => 'ja_JP.utf8'
+// ));
+// define('TLIB_DEFAULT_PO_TARGET_EXTENSIONS', array('php')); // extensions of target files which needed to make po files (needed to translate).
+
+// $setLocale = ''; // for browser
+// if (php_sapi_name() == 'cli'){ $setLocale = TLIB_DEFAULT_LANG; } // for script using command line
+// tlib\clsLocale::setLocale($setLocale);
+
+// 2 letters of choosed language
+//$LANG = substr($setLocale, 0, 2);
+
 class clsLocale {
 
 	public const DEFAULT_LANG = 'en_US.utf8';

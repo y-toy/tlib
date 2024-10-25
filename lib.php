@@ -5,63 +5,52 @@ namespace tlib;
 /// 共通関数 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-// ログインチェックのみ
-class lib {
+// 再頻出関数のみここに記述
+class core {
 
 	/**
-	 * OAUTH_SESSIONテーブルを使い、ログイン中か調べる
+	 * OA2_ACCESS_TOKENSテーブルを使い、ログイン中か調べる
 	 *
 	 * @param clsDB $db アカウント用のDBオブジェクト
-	 * @param integer $APP_ID ログイン中か調べるAPP_ID
+	 * @param integer $client_id ログイン中か調べるclient_id
 	 * @param string $SESSION_CODE セッション $bUpdateSessionCodeの場合、変更の可能性あり。
-	 * @param bool $dayOfSessionUpdate 最後にSESSIONコードを更新してからこの日数経過していたら、$SESSION_CODEを別の値に書き換える。ついでに有効期限も延長する。　0で書き換え無し
+	 * @param int $dayOfSessionUpdate 最後にSESSIONコードを更新してからこの日数経過していたら、$SESSION_CODEを別の値に書き換える。ついでに有効期限も延長する。　0で書き換え無し
 	 * @param bool $bUpdateExpireDate $loginExpiredDaysの半分以下の有効期限となっていた場合、有効期限を伸ばす場合はtrue
-	 * @return integer ログインしているaccountのID ログインしていない場合は0
+	 * @return integer ログインしているuserのUSER_ID ログインしていない場合は0
 	 */
 
-	static function isLogin(clsDB $db, int $APP_ID, string &$SESSION_CODE, int $dayOfSessionUpdate = 1, bool $bUpdateExpireDate = true) : int{
+	static function isLogin(clsDB $db, int $client_id, string &$SESSION_CODE, int $dayOfSessionUpdate = 1, bool $bUpdateExpireDate = true) : int{
 
 		// $SESSION_CODEは外部から渡される可能性があるので、一応エスケープしておく。
 		$escapeSESSION_CODE = $db->real_escape_string($SESSION_CODE);
 
-		$sql = 'SELECT ACCOUNT_ID, DATEDIFF(now(),LAST_CHECK_TIME), DATEDIFF(now(), EXPIRE_TIME) FROM OAUTH_SESSION
-		WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '" AND EXPIRE_TIME <= now()';
-		$SESSION_INFO = $db->getFirstRow($sql);
-		if ($SESSION_INFO === null){ return 0; }
-		$ACCOUNT_ID = $SESSION_INFO[0];
-		$daysFromLastChecked = abs($SESSION_INFO[1]);
-		$daysToExpire = abs($SESSION_INFO[2]);
+		$sql = 'SELECT ID, USER_ID, EXPIRES, DATEDIFF(now(), UPDATE_TIME) FROM OA2_ACCESS_TOKENS WHERE CLIENT_ID = ' . $client_id . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '" AND EXPIRES > now()';
+		$ACCESS_INFO = $db->getFirstRow($sql);
+		if ($ACCESS_INFO === null){ return 0; }
 
-		// ここから先の処理はついでなので、エラーでも処理自体は止めない。エラーはログ出力する。
+		$USER_ID = $ACCESS_INFO[1];
 
-		// セッションコードを変更するか
-		if ($dayOfSessionUpdate > 0 && $daysFromLastChecked >= $dayOfSessionUpdate){
-
-			// 変更する　ついでなので期限も延長
+		// ここから先はエラーでも気にしない。できれば別のスレッドにして実行したいが、PHPはマルチスレッドではないので、execで実行するしかない。
+		if ($dayOfSessionUpdate > 0 && $dayOfSessionUpdate <= $ACCESS_INFO[3]){
 			for ($i=0;$i < 10;$i++){
-				$NEW_SESSION_CODE = lib::getSessionHashCode($APP_ID, $ACCOUNT_ID);
-				$sql = 'UPDATE OAUTH_SESSION SET ACCESS_TOKEN = "' . $NEW_SESSION_CODE . '", EXPIRE_TIME=ADDDATE(now(), ' . TLIB_LOGIN_EXPIRE_DAYS . '), LAST_CHECK_TIME=now() WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
+				$NEW_SESSION_CODE = util::getRandamCode128($client_id, $USER_ID);
+				if ($bUpdateExpireDate){
+					$sql = 'UPDATE OA2_ACCESS_TOKENS SET ACCESS_TOKEN = "' . $NEW_SESSION_CODE . '", EXPIRES=DATE_ADD(now(), INTERVAL ' . TLIB_LOGIN_EXPIRE_DAYS . ' DAY), UPDATE_TIME=now() WHERE ID = ' . $ACCESS_INFO[0];
+				}else{
+					$sql = 'UPDATE OA2_ACCESS_TOKENS SET ACCESS_TOKEN = "' . $NEW_SESSION_CODE . '", UPDATE_TIME=now() WHERE ID = ' . $ACCESS_INFO[0];
+				}
 				$ret = $db->query($sql);
-				if (!$ret && $i >= 9){ vitalLogOut(__METHOD__ . ' : ' . $sql); }
+				if (!$ret && $i >= 9){ util::vitalLogOut(util::LEVEL_ERROR, __CLASS__ . ' : ' .  __METHOD__ . ' : ' . $sql); }
+				if ($ret){ $SESSION_CODE = $NEW_SESSION_CODE; break; }
 			}
-
-		}else{
-			// 有効期限を伸ばす (伸ばす場合は、LAST_CHECK_TIMEも合わせて更新)
-			if ($bUpdateExpireDate && (floor(TLIB_LOGIN_EXPIRE_DAYS/2) > $daysToExpire) ){
-				$sql = 'UPDATE OAUTH_SESSION SET EXPIRE_TIME = ADDDATE(now(), ' . TLIB_LOGIN_EXPIRE_DAYS . '), LAST_CHECK_TIME=now()
-				WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
-			// 通常の処理 LAST_CHECK_TIMEのみ更新
-			}else{
-				$sql = 'UPDATE OAUTH_SESSION SET LAST_CHECK_TIME=now() WHERE APP_ID = ' . $APP_ID . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '"';
-			}
+		}else if ($bUpdateExpireDate){
+			$sql = 'UPDATE OA2_ACCESS_TOKENS SET EXPIRES=DATE_ADD(now(), INTERVAL ' . TLIB_LOGIN_EXPIRE_DAYS . ' DAY), UPDATE_TIME=now() WHERE ID = ' . $ACCESS_INFO[0];
 			$ret = $db->query($sql);
-			if (!$ret){ vitalLogOut(__METHOD__ . ' : ' . $sql); }
+			if (!$ret){ util::vitalLogOut(util::LEVEL_ERROR, __CLASS__ . ' : ' .  __METHOD__ . ' : ' . $sql); }
 		}
 
-		return $ACCOUNT_ID;
+		return $USER_ID;
 	}
-
-	static function getSessionHashCode(int $APP_ID, int $ACCOUNT_ID) : string{ return hash(TLIB_HASH_ALGO_SESS, $APP_ID . $ACCOUNT_ID .  time() . TLIB_HASH_SOLT . random_bytes(32)); }
 
 }
 
@@ -161,7 +150,7 @@ class myHttp {
 	 * @param string $str
 	 * @return string
 	 */
-	function br2nl(string $str) : string{
+	static function br2nl(string $str) : string{
 		return preg_replace('/<br[[:space:]]*\/?[[:space:]]*>/i', '', $str);
 	}
 
@@ -301,7 +290,7 @@ class myDate {
 	 * @param string $dateB YYYY-MM-DD or YYYY-MM-DD hh:ii:ss (hh:ii:ssは無視される)
 	 * @return int 日数
 	 */
-	function dateDiffAbs(string $dateA, string $dateB) : int { return floor(abs(self::strToDate($dateB) - self::strToDate($dateA)) / 86400) + 1; }
+	static function dateDiffAbs(string $dateA, string $dateB) : int { return floor(abs(self::strToDate($dateB) - self::strToDate($dateA)) / 86400) + 1; }
 
 }
 
@@ -422,32 +411,38 @@ class isThis {
 	 * @param string $pass チェックするパスワード
 	 * @param integer $minLen パスワードの最小の長さ
 	 * @param integer $maxLen パスワードの最長の長さ 0で制限なし
-	 * @param integer $mode 0 どんな文字でもOK 1 数字と小文字アルファベット 2 数字と大文字・小文字 3 数字と大文字・小文字と記号()
-	 * @return integer 0 正常 1 短すぎる 2 長すぎる 3 数字のみエラー 4 数字なし 5 小文字なし 6 大文字なし 7 記号無し
+	 * @param integer $mode 0 どんな文字でもOK 1 数字とアルファベット 2 数字と大文字・小文字 3 数字と大文字・小文字と記号()
+	 * @return integer 0 正常 1 短すぎる 2 長すぎる 3 数字のみエラー 4 数字なし 5 小文字なし 6 大文字なし 7 記号無し 8 アルファベットなし
 	 */
 	static function password(string $pass, int $minLen, int $maxLen, int $mode) : int{
 
 		$passLen = mb_strlen($pass);
 		if ($passLen < $minLen){ return 1; }
-		if ($maxLen != 0 && $passLen > $maxLen){ return 2; }
+		if ($passLen > $maxLen){ return 2; }
 
-		// なんでもOK
-		if ($mode == 0){ return 0; }
-
-		if (preg_match('/^[0-9]+$/', $pass)){ return 3; } // 全部数字はNG
-		if (!preg_match('/[0-9]/', $pass)){ return 4; } // 数字を含まない
-		if (!preg_match('/[a-z]/', $pass)){ return 5; } // 小文字を含まない
-
-		// 数字とアルファベットを含んでいたらOK
-		if ($mode == 1){ return 0; }
-
-		if (!preg_match('/[A-Z]/', $pass)){ return 6; } // 大文字を含まない
-
-		// 数字と小文字大文字を含んでいたらOK
-		if ($mode == 2){ return 0; }
-
-		if (!ctype_alnum($pass)){ return 7; } // 記号を含まない
-
+ 		// パスワードの内容チェック
+		if ($mode > 0) {
+			if (ctype_digit($pass)) {
+				return 3; // 数字のみエラー
+			}
+			if (!preg_match('/\d/', $pass)) {
+				return 4; // 数字なし
+			}
+			if (!preg_match('/[a-zA-Z]/', $pass)) {
+				return 8; // アルファベットなし
+			}
+			if ($mode > 1) {
+				if (!preg_match('/[a-z]/', $pass)) {
+					return 5; // 小文字なし
+				}
+				if (!preg_match('/[A-Z]/', $pass)) {
+					return 6; // 大文字なし
+				}
+				if ($mode > 2 && ctype_alnum($pass)) {
+					return 7; // 記号無し
+				}
+			}
+		}
 		return 0;
 	}
 }
@@ -465,14 +460,7 @@ class priceCalc {
 	 * @param string $baseDate 'yyyy-mm-dd' or 'yyyy-mm-dd hh:mm:ss' 計算の基準日 税率の変更があった場合に使用。
 	 * @return int 税額
 	 */
-	static function getIncTaxAmount($price, $baseDate){
-		//
-		// $ts = myDate::strToDate($baseDate);
-		// if ($ts < $GLOBALS['taxChangeTS']){
-		// 	return round($price/108 * 8);
-		// }else{
-		// 	return round($price/108 * 8);
-		// }
+	static function getIncTaxAmount(int $price, string $baseDate = ''): int{
 		return round($price/110 * 10);
 	}
 
@@ -483,14 +471,7 @@ class priceCalc {
 	 * @param string $baseDate 'yyyy-mm-dd' or 'yyyy-mm-dd hh:mm:ss' 計算の基準日 税率の変更があった場合に使用。
 	 * @return int 税額
 	 */
-	static function getTaxAmount($price, $baseDate){
-		//
-		// $ts = myDate::strToDate($baseDate);
-		// if ($ts < $GLOBALS['taxChangeTS']){
-		// 	return round($price*0.1);
-		// }else{
-		// 	return round($price*0.08);
-		// }
+	static function getTaxAmount(int $price, string $baseDate = '') : int{
 		return round($price*0.1);
 	}
 
@@ -500,9 +481,9 @@ class priceCalc {
 	 *
 	 * @param int $originalPrice
 	 * @param int $dicountPercet
-	 * @return int
+	 * @return int 割引後の金額
 	 */
-	static function getDiscountPrice(int $originalPrice, int $dicountPercet){
+	static function getDiscountPrice(int $originalPrice, int $dicountPercet) : int{
 		if ($dicountPercet == 0 || $dicountPercet >= 100){ return 0; }
 		return round(($originalPrice/100) * (100-$dicountPercet));
 	}
@@ -674,6 +655,10 @@ class util{
 		return $plaintext;
 	}
 
+	const LEVEL_DEBUG = 1;
+	const LEVEL_WARNINT = 2;
+	const LEVEL_ERROR = 2;
+
 	/**
 	 * ログ出力関数
 	 * ハンドルできないエラーでのみ最後のログ出力として使用。$level = 1 debug 2 warn 3 error
@@ -694,6 +679,7 @@ class util{
 			}
 		}
 		$outFolder = rtrim( $outFolder, '/' ) . '/';
+		if (!file_exists($outFolder)){ mkdir($outFolder); }
 		$file = $outFolder . date('Ymd') . '.log';
 
 		//*** ファイル書き込み
@@ -714,5 +700,57 @@ class util{
 		//*** ログフォルダー以下の古いファイルを削除
 		self::deleteOldFiles($outFolder, 90);
 	}
-}
 
+	/**
+	 * Writes a system log entry.
+	 *
+	 * @param clsDB $db The database connection object.
+	 * @param int $userId The ID of the user who triggered the log entry. if 0. no user (system batch or something).
+	 * @param int $logType The type of the log entry. 1:debug 2:WARNING 3:ERROR
+	 * @param string $logMessage The message to be logged.
+	 * @return bool Returns true if the log entry was successfully written, false otherwise.
+	 */
+	static function systemLog(clsDB &$db, int $userId, int $logType, string $logMessage): bool {
+		$sql = 'INSERT INTO SYSTEM_LOG (USER_ID, LOG_TYPE, LOG_MESSAGE) VALUES
+		(' . $userId . ',' . $logType . ',"' . $db->real_escape_string($logMessage) . '")';
+		return (bool)$db->query($sql);
+	}
+
+	/**
+	 * Logs user activity.
+	 *
+	 * @param clsDB $db The database connection object.
+	 * @param int $userId The ID of the user.
+	 * @param int $groupId The ID of the group. if 0, no group.
+	 * @param int $activityTypeId The ID of the activity type.
+	 * @param string $activityDetail The details of the activity.
+	 * @return bool Returns true if the activity is logged successfully, false otherwise.
+	 */
+	static function userLog(clsDB &$db, int $userId, int $groupId, int $activityTypeId, string $activityDetail) : bool {
+		// エスケープ処理
+		$activityDetail = $db->real_escape_string($activityDetail);
+
+		// SQLクエリの作成
+		$sql = 'INSERT INTO USER_ACTIVITY (USER_ID, GROUP_ID, ACTIVITY_TYPE_ID, ACTIVITY_DETAIL) VALUES (
+			' . $userId . ',' . $groupId . ',' . $activityTypeId . ',"' . $activityDetail . '")';
+
+		return (bool) $db->query($sql);
+	}
+
+	/**
+	 * Generates a random 128 length Code .
+	 *
+	 * @param int $ID_01 The solt 1 to avoid confliction.
+	 * @param int $ID_02 The solt 2 to avoid confliction.
+	 * @return string The generated 128 length Code.
+	 */
+	static function getRandamCode128(int $ID_01 = 0, int $ID_02 = 0) : string{ return hash('sha3-512', $ID_01 . $ID_02 . time() . TLIB_HASH_SOLT . mt_rand()); }
+
+	/**
+	 * Returns the hash of a password using SHA3-512 algorithm.
+	 *
+	 * @param string $password The password to be hashed.
+	 * @return string The hashed password.
+	 */
+	static function getPasswordHash(string $password) : string{ return hash('sha3-512',  $password . TLIB_HASH_SOLT); }
+}

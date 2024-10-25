@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS ATTACK_CHECK(
+	IP_ADDRESS VARBINARY(16) NOT NULL COMMENT "Store IPv4 and IPv6 both. INET6_ATON()で返された値",
+	ATTACK_CNT INT NOT NULL COMMENT "Count of Suspected Attacks from the IP address.",
+	EXPIRED_TIME datetime NOT NULL COMMENT 'This row will be deleted after this time.',
+	INSERT_TIME datetime NOT NULL COMMENT 'Insert time',
+	INDEX INDEX_IP_ADDRESS (IP_ADDRESS)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=1 ;

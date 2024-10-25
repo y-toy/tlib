@@ -40,7 +40,7 @@ class myModel {
 		$this->db = $db;
 
 		// apcuが使える場合はapcuから情報を取得できるか試す。
-		$bUseAPCu = \apcu_enabled();
+		$bUseAPCu = (function_exists('apcu_enabled') && apcu_enabled());
 		if ($bUseAPCu && apcu_exists($this->tablename)){
 			$cacheData = apcu_fetch($this->tablename);
 			if ($cacheData !== false){

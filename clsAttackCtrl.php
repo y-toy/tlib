@@ -33,7 +33,7 @@ class clsAttackCtrl{
 	 *
 	 * @param int $cntAttack
 	 * @param int $cntWarning
-	 * @return integer
+	 * @return integer 0 アクセス可 1 アクセス可だが警告 2 攻撃とみなしアクセス不可
 	 */
 	function isAttack(int $cntAttack = self::MAX_ATTACK_CNT, int $cntWarning = self::WARNING_ATTACK_CNT) : int{
 		$cnt = $this->getNowAttackCnt();

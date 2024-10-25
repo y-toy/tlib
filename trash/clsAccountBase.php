@@ -1,8 +1,6 @@
 <?php
 namespace tlib;
 
-use Exception;
-
 /**
  * アカウント関係のテーブル処理を行い、以下の機能の部品を提供
  *  ・アカウントの追加／修正／削除
@@ -27,7 +25,7 @@ class clsAccountBase {
 
 	protected ?clsDB $db = null; // アカウント専用のDBを持つ場合は外部で対応のこと。
 	protected $strError = ''; // エラーが発生した際にエラー内容を入れておくメンバ変数
-	protected $msg = null;
+	private ?clsTransfer $msg= null;
 
 	///////////////////////////////////////////////////////////////////////////
 	// construct / destruct
@@ -35,7 +33,7 @@ class clsAccountBase {
 	public function __construct(clsDB &$db){
 		// 各引数の内容はメンバ変数参照
 		$this->db = $db;
-		$this->msg = clsLocale(get_class($this), TLIB_LOCALE_FILE_PATH_FOR_TLIB_CLASSES);
+		$this->msg= clsTransfer(pathinfo(__FILE__, PATHINFO_FILENAME), __DIR__ . '/locale/');
 	}
 
 	public function __destruct(){}
@@ -70,7 +68,7 @@ class clsAccountBase {
 					VALUES ("' . $ACCOUNT_ID_CHARS . '", "' . $this->db->real_escape_string($USER_NAME) . '", "' . $PASS . '", ' . $USER_NAME_VERIFIED_ID . ', 0, 0, 0, 1, now(), now())';
 				$ret = $this->db->query($sql);
 				if ($ret == true){ break; }
-				if ($i==9){ throw new \Exception($this->msg->_('SYSTEM ERROR : Failed to insert ACCOUNT table.')); }
+				if ($i==9){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : Failed to insert ACCOUNT table.')); }
 			}
 
 			$ACCOUNT_ID = $this->db->getFirstOne('SELECT LAST_INSERT_ID()');
@@ -109,15 +107,15 @@ class clsAccountBase {
 		///////////////////////////////////////////////////////////////////////
 		// 引数チェック
 
-		if ($ACCOUNT_ID == 0){ $this->strError = $this->msg->_('ACCOUNT_ID must be 1 or higher.'); return 1; }
+		if ($ACCOUNT_ID == 0){ $this->strError = $this->baseMsg->_('ACCOUNT_ID must be 1 or higher.'); return 1; }
 
 		if ($USER_NAME === null){ $USER_NAME = ''; }
 		if ($PASS === null){ $PASS = ''; }
 		$ret = $this->checkAccountPara($ACCOUNT_ID, $USER_NAME, $PASS, $USER_NAME_TYPE, $aryAppId);
 		if ($ret > 0){ return 1; }
 
-		if ($LOCKED != 0 && $LOCKED != 1){ $this->strError = $this->msg->_('The "LOCKED" only accept 1 or 0.'); return 1; }
-		if ($VALID != 0 && $VALID != 1){ $this->strError = $this->msg->_('The "VALID" only accept 1 or 0.'); return 1; }
+		if ($LOCKED != 0 && $LOCKED != 1){ $this->strError = $this->baseMsg->_('The "LOCKED" only accept 1 or 0.'); return 1; }
+		if ($VALID != 0 && $VALID != 1){ $this->strError = $this->baseMsg->_('The "VALID" only accept 1 or 0.'); return 1; }
 
 		///////////////////////////////////////////////////////////////////////
 		// SQL実行
@@ -138,7 +136,7 @@ class clsAccountBase {
 
 		$ret = $this->db->query($sql);
 		if ($ret === false){
-			$this->strError = $this->msg->_('SYSTEM ERROR : FAILED TO MODIFY THE INFORMATION.');
+			$this->strError = $this->baseMsg->_('SYSTEM ERROR : FAILED TO MODIFY THE INFORMATION.');
 			return 99;
 		}
 
@@ -161,7 +159,7 @@ class clsAccountBase {
 		// アカウントがあるかチェック
 		$sql = 'SELECT COUNT(*) FROM ACCOUNT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID;
 		$cnt = $this->db->getFirstOne($sql);
-		if (is_null($cnt) || $cnt <= 0){ $this->strError = $this->msg->_('Could not find your account.'); return false; }
+		if (is_null($cnt) || $cnt <= 0){ $this->strError = $this->baseMsg->_('Could not find your account.'); return false; }
 
 		if ($bUseTransaction){
 			$this->db->autocommit(FALSE);
@@ -169,29 +167,29 @@ class clsAccountBase {
 
 		try{
 			$ret = $this->db->query('DELETE FROM ACCOUNT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 01')); }
+			if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 01')); }
 
 			$ret = $this->db->query('DELETE FROM ACCOUNT_INFO_VERIFIED WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 02')); }
+			if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 02')); }
 
 			$ret = $this->db->query('DELETE FROM AUTH_VERIFY WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-			if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 03')); }
+			if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 03')); }
 
 			if ($bDelFromApp){
 				$ret = $this->db->query('DELETE FROM OAUTH_USER_PERMIT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-				if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 05')); }
+				if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 05')); }
 
 				$ret = $this->db->query('DELETE FROM OAUTH_CODE_SESSION WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-				if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 06')); }
+				if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 06')); }
 
 				$ret = $this->db->query('DELETE FROM OAUTH_SESSION WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-				if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 07')); }
+				if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 07')); }
 
 				$ret = $this->db->query('DELETE FROM ACCOUNT_SESSION WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-				if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 08')); }
+				if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 08')); }
 
 				$ret = $this->db->query('DELETE FROM ACCOUNT_ACTIVITY WHERE ACCOUNT_ID = ' . $ACCOUNT_ID);
-				if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 09')); }
+				if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 09')); }
 			}
 
 		}catch(Exception $e){
@@ -244,8 +242,8 @@ class clsAccountBase {
 		$aryAppId = array();
 		$USER_NAME_TYPE = self::USER_NAME_TYPE_OTHER;
 
-		if ($USER_NAME == ''){ $this->strError = $this->msg->_('Please enter your account name.'); return 50; }
-		if ($PASS == ''){ $this->strError = $this->msg->_('Please enter your password.'); return 51; }
+		if ($USER_NAME == ''){ $this->strError = $this->baseMsg->_('Please enter your account name.'); return 50; }
+		if ($PASS == ''){ $this->strError = $this->baseMsg->_('Please enter your password.'); return 51; }
 
 		$passMinLen = ((defined(TLIB_MIN_PASSWORD_LENGTH))?TLIB_MIN_PASSWORD_LENGTH:self::MIN_PASSWORD_LENGTH);
 		$passMaxLen = ((defined(TLIB_MAX_PASSWORD_LENGTH))?TLIB_MAX_PASSWORD_LENGTH:self::MAX_PASSWORD_LENGTH);
@@ -254,23 +252,23 @@ class clsAccountBase {
 		// ユーザ名のタイプ判断
 		$USER_NAME_TYPE = $this->judgeIdType(-1,$USER_NAME);
 		if ($USER_NAME_TYPE == self::USER_NAME_TYPE_OTHER){
-			if (mb_strlen($USER_NAME) < self::MIN_USER_NAME_LENGTH){ $this->strError = $this->msg->_('Your user name is too short.'); return 1; }
-			if (mb_strlen($USER_NAME) > self::MAX_USER_NAME_LENGTH){ $this->strError = $this->msg->_('Your user name is too long.');return 2; }
+			if (mb_strlen($USER_NAME) < self::MIN_USER_NAME_LENGTH){ $this->strError = $this->baseMsg->_('Your user name is too short.'); return 1; }
+			if (mb_strlen($USER_NAME) > self::MAX_USER_NAME_LENGTH){ $this->strError = $this->baseMsg->_('Your user name is too long.');return 2; }
 		}
 
 		if (!is_null($PASS)){
 			$ret = isThis::password($PASS, $passMinLen, $passMaxLen, $passMode);  // 0 正常 1 短すぎる 2 長すぎる 3 数字のみエラー 4 数字なし 5 小文字なし 6 大文字なし 7 記号無し
 			if ($ret > 0){
 				switch($ret){
-					case 1 : $this->strError = $this->msg->_('Your password is too short.'); break;
-					case 2 : $this->strError = $this->msg->_('Your password is too long.'); break;
-					case 3 : $this->strError = $this->msg->_('Please include some letters other than numbers in your password..'); break;
-					case 4 : $this->strError = $this->msg->_('Please include some numbers in your password.'); break;
-					case 5 : $this->strError = $this->msg->_('Please put lowercase letters in your password.'); break;
-					case 6 : $this->strError = $this->msg->_('Please put uppercase letters in your password.'); break;
-					case 7 : $this->strError = $this->msg->_('Please put a symbol in the password.'); break;
+					case 1 : $this->strError = $this->baseMsg->_('Your password is too short.'); break;
+					case 2 : $this->strError = $this->baseMsg->_('Your password is too long.'); break;
+					case 3 : $this->strError = $this->baseMsg->_('Please include some letters other than numbers in your password..'); break;
+					case 4 : $this->strError = $this->baseMsg->_('Please include some numbers in your password.'); break;
+					case 5 : $this->strError = $this->baseMsg->_('Please put lowercase letters in your password.'); break;
+					case 6 : $this->strError = $this->baseMsg->_('Please put uppercase letters in your password.'); break;
+					case 7 : $this->strError = $this->baseMsg->_('Please put a symbol in the password.'); break;
 					default:
-					$this->strError = $this->msg->_('Unknown error occured when checking your password.');
+					$this->strError = $this->baseMsg->_('Unknown error occured when checking your password.');
 				}
 
 				return ($ret + 2); // 3 ～ 9
@@ -289,7 +287,7 @@ class clsAccountBase {
 			}
 
 			$existACCOUNT_ID = $this->db->getFirstOne($sql);
-			if ($existACCOUNT_ID === null){ $this->strError = $this->msg->_('SQL Error : when checking existing account'); return 99;  }
+			if ($existACCOUNT_ID === null){ $this->strError = $this->baseMsg->_('SQL Error : when checking existing account'); return 99;  }
 			if ($existACCOUNT_ID > 0){
 
 				// 既に登録済み
@@ -297,7 +295,7 @@ class clsAccountBase {
 				$aryAppId = $this->db->getTheClmArray($sql);
 
 				// エラーで終了
-				$this->strError = $this->msg->_('It is possible that the user_name has already been registered.');
+				$this->strError = $this->baseMsg->_('It is possible that the user_name has already been registered.');
 				return 60;
 			}
 
@@ -308,20 +306,20 @@ class clsAccountBase {
 			$sql = 'SELECT USER_NAME, PASS FROM ACCOUNT WHERE ACCOUNT_ID = ' . $ACCOUNT_ID;
 			$row = $this->db->getFirstRow($sql);
 			if ($row === null){
-				$this->strError = $this->msg->_('Could not find your accout.');
+				$this->strError = $this->baseMsg->_('Could not find your accout.');
 				return 55;
 			}
 			if ($row[0] == $USER_NAME){
 				// ユーザ名が同じでパスワードも同じ
 				if ($row[1] == $this->hashPass($PASS)){
-					$this->strError = $this->msg->_('The specified change information is the same as the current one.');
+					$this->strError = $this->baseMsg->_('The specified change information is the same as the current one.');
 					return 56;
 				}
 			}else{
 				// ユーザ名が違う。既に登録されていないかチェック
 				$sql = 'SELECT ifnull(ACCOUNT_ID,0) FROM ACCOUNT WHERE USER_NAME = "' . $USER_NAME . '" AND VALID = 1';
 				$existACCOUNT_ID = $this->db->getFirstOne($sql);
-				if ($existACCOUNT_ID === null){ $this->strError = $this->msg->_('SQL Error : when checking existing account'); return 99;  }
+				if ($existACCOUNT_ID === null){ $this->strError = $this->baseMsg->_('SQL Error : when checking existing account'); return 99;  }
 				if ($existACCOUNT_ID > 0){
 
 					// 既に登録済み
@@ -329,7 +327,7 @@ class clsAccountBase {
 					$aryAppId = $this->db->getTheClmArray($sql);
 
 					// エラーで終了
-					$this->strError = $this->msg->_('It is possible that the user_name has already been registered.');
+					$this->strError = $this->baseMsg->_('It is possible that the user_name has already been registered.');
 					return 60;
 				}
 
@@ -386,11 +384,11 @@ class clsAccountBase {
 
 		try{
 
-			$ret = $this->db->query('DELETE FROM OAUTH_USER_PERMIT  WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
-			$ret = $this->db->query('DELETE FROM OAUTH_CODE_SESSION WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 02')); }
-			$ret = $this->db->query('DELETE FROM OAUTH_SESSION      WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 03')); }
-			$ret = $this->db->query('DELETE FROM ACCOUNT_SESSION    WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 04')); }
-			$ret = $this->db->query('DELETE FROM ACCOUNT_ACTIVITY   WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 05')); }
+			$ret = $this->db->query('DELETE FROM OAUTH_USER_PERMIT  WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
+			$ret = $this->db->query('DELETE FROM OAUTH_CODE_SESSION WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 02')); }
+			$ret = $this->db->query('DELETE FROM OAUTH_SESSION      WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 03')); }
+			$ret = $this->db->query('DELETE FROM ACCOUNT_SESSION    WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 04')); }
+			$ret = $this->db->query('DELETE FROM ACCOUNT_ACTIVITY   WHERE APP_ID = ' . $APP_ID . ' AND ACCOUNT_ID = ' . $ACCOUNT_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 05')); }
 
 		}catch(Exception $e){
 			if ($bUseTransaction){
@@ -436,7 +434,7 @@ class clsAccountBase {
 			// // 既に認証済みではないか確認
 			// $sql = 'SELECT COUNT(*) FROM ACCOUNT_INFO_VERIFIED WHERE AUTH_TYPE = ' . $AUTH_TYPE . ' AND AUTH_INFO = "' . $this->db->real_escape_string($AUTH_INFO) . '" AND VALID = 1';
 			// $cnt = $this->db->getFirstOne($sql);
-			// if ($cnt === null){ throw new \Exception($this->msg->_('SYSTEM ERROR : failed to check the TFA information exists.')); }
+			// if ($cnt === null){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : failed to check the TFA information exists.')); }
 			// if ($cnt > 0){
 			// 	// 既に認証済み
 			// 	$bAuthExists = true;
@@ -457,7 +455,7 @@ class clsAccountBase {
 				if ($ret === true){ $inserted = true; break; }
 			}
 			if (!$inserted){
-				throw new \Exception($this->msg->_('SYSTEM ERROR : FAILED TO INSERT AUTH_VERIFY'));
+				throw new \Exception($this->baseMsg->_('SYSTEM ERROR : FAILED TO INSERT AUTH_VERIFY'));
 			}
 
 		}catch(\Exception $e){
@@ -485,18 +483,18 @@ class clsAccountBase {
 			$verifyInfo = $this->db->getFirstRowAssoc($sql);
 
 			// セッションが見つからないか有効期限エラー
-			if ($verifyInfo == null){ throw new \Exception($this->msg->_('Could not find the user session. Probably the authentication time has expired.')); }
+			if ($verifyInfo == null){ throw new \Exception($this->baseMsg->_('Could not find the user session. Probably the authentication time has expired.')); }
 
 			// 認証回数エラー
-			if ($verifyInfo['FAILED_CNT'] >= self::MAX_AUTH_VERIFY_FAILED_COUNT){ throw new \Exception($this->msg->_('Too many times to enter the code.')); }
+			if ($verifyInfo['FAILED_CNT'] >= self::MAX_AUTH_VERIFY_FAILED_COUNT){ throw new \Exception($this->baseMsg->_('Too many times to enter the code.')); }
 
 			// 認証エラー
 			if ($verifyInfo['VERIFY_CODE'] != $VERIFY_CODE){
 				$sql = 'UPDATE AUTH_VERIFY SET FAILED_CNT = FAILED_CNT+1 WHERE TEMP_SESSION_KEY = "' . $ESCAPE_TEMP_SESSION_KEY . '"';
 				$ret = $this->db->query($sql);
-				if ($ret === false){ throw new \Exception($this->msg->_('SYSTEM ERROR : DB ACCESS FAILED.')); }
+				if ($ret === false){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : DB ACCESS FAILED.')); }
 
-				throw new \Exception($this->msg->_('Wrong code specifyed via two facter authentication.'));
+				throw new \Exception($this->baseMsg->_('Wrong code specifyed via two facter authentication.'));
 			}
 
 		}catch(\Exception $e){
@@ -527,12 +525,12 @@ class clsAccountBase {
 			$sql = 'SELECT AUTH_TYPE, AUTH_INFO FROM AUTH_VERIFY WHERE TEMP_SESSION_KEY = "' . $ESCAPE_TEMP_SESSION_KEY . '"';
 			$verifyInfo = $this->db->getFirstRowAssoc($sql);
 			// セッションが見つからない
-			if ($verifyInfo == null){ $this->strError = $this->msg->_('Could not find the user session.'); return false; }
+			if ($verifyInfo == null){ $this->strError = $this->baseMsg->_('Could not find the user session.'); return false; }
 		}
 
 		$sql = 'SELECT COUNT(*) FROM ACCOUNT_INFO_VERIFIED WHERE ACCOUNT_ID = ' . $ACCOUNT_ID;
 		$VERIFIED_ID = $this->db->getFirstOne($sql);
-		if ($VERIFIED_ID == null){  $this->strError = $this->msg->_('SYSTEM ERROR : FAILED TO GET ACCOUNT_INFORMATION.'); return false; }
+		if ($VERIFIED_ID == null){  $this->strError = $this->baseMsg->_('SYSTEM ERROR : FAILED TO GET ACCOUNT_INFORMATION.'); return false; }
 
 		if ($bUseTransaction){
 			$this->db->autocommit(FALSE);
@@ -544,12 +542,12 @@ class clsAccountBase {
 			$sql = 'INSERT INTO ACCOUNT_INFO_VERIFIED (ACCOUNT_ID, VERIFIED_ID, VERIFIED_INFO_TYPE, VERIFIED_INFO, VALID, LAST_VALID_TIME, INSERT_TIME)
 				VALUES (' . $ACCOUNT_ID . ', ' . ($VERIFIED_ID+1) . ', ' . $verifyInfo['AUTH_TYPE'] . ', "' . $verifyInfo['AUTH_INFO'] . '", 1, now(), now())';
 			$ret = $this->db->query($sql);
-			if (!$ret){ throw new \Exception($this->msg->_('SYSTEM ERROR : Failed to insert ACCOUNT_INFO_VERIFIED table.')); }
+			if (!$ret){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : Failed to insert ACCOUNT_INFO_VERIFIED table.')); }
 
 			// AUTH_VERIFYの削除
 			$sql = 'DELETE FROM AUTH_VERIFY WHERE TEMP_SESSION_KEY = "' . $ESCAPE_TEMP_SESSION_KEY . '"';
 			$ret = $this->db->query($sql);
-			if (!$ret){ throw new \Exception($this->msg->_('SYSTEM ERROR : Failed to DELETE AUTH_VERIFY table.')); }
+			if (!$ret){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : Failed to DELETE AUTH_VERIFY table.')); }
 
 		}catch(Exception $e){
 
@@ -616,9 +614,9 @@ class clsAccountBase {
 				// IDが被らないように
 				$sql = 'SELECT COUNT(*) FROM OAUTH_APPLICATION WHERE APP_ID_CHARS = "' .  $APP_ID_CHARS . '"';
 				$cnt = $this->db->getFirstOne($sql);
-				if ($cnt === null){ throw new \Exception($this->msg->_('SYSTEM ERROR : FAILED TO GET new ID chars')); }
+				if ($cnt === null){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : FAILED TO GET new ID chars')); }
 				if ($cnt == 0){ break; }
-				if ($i == 9){ throw new \Exception($this->msg->_('SYSTEM ERROR : FAILED TO GET new ID chars : Over MAX count')); }
+				if ($i == 9){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : FAILED TO GET new ID chars : Over MAX count')); }
 			}
 
 			// インサート実行
@@ -631,10 +629,10 @@ class clsAccountBase {
 				"' . $this->db->escape_string($SCOPE) . '",
 			)';
 			$ret = $this->db->query($sql);
-			if (!$ret){ throw new \Exception($this->msg->_('SYSTEM ERROR : FAILED TO INSERT OAUTH_APPLICATION')); }
+			if (!$ret){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : FAILED TO INSERT OAUTH_APPLICATION')); }
 
 			$APP_ID = $this->db->getFirstOne('SELECT LAST_INSERT_ID()');
-			if ($APP_ID === null){ throw new \Exception($this->msg->_('SYSTEM ERROR : FAILED TO GET LAST_INSERTED_ID')); }
+			if ($APP_ID === null){ throw new \Exception($this->baseMsg->_('SYSTEM ERROR : FAILED TO GET LAST_INSERTED_ID')); }
 
 		}catch(\Exception $e){
 			$this->strError = __METHOD__ . ' : ' . $e->getMessage();
@@ -719,12 +717,12 @@ class clsAccountBase {
 
 		try{
 
-			$ret = $this->db->query('DELETE FROM OAUTH_APPLICATION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
-			$ret = $this->db->query('DELETE FROM OAUTH_USER_PERMIT  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
-			$ret = $this->db->query('DELETE FROM OAUTH_CODE_SESSION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
-			$ret = $this->db->query('DELETE FROM OAUTH_SESSION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
-			$ret = $this->db->query('DELETE FROM ACCOUNT_SESSION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
-			$ret = $this->db->query('DELETE FROM ACCOUNT_ACTIVITY  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
+			$ret = $this->db->query('DELETE FROM OAUTH_APPLICATION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
+			$ret = $this->db->query('DELETE FROM OAUTH_USER_PERMIT  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
+			$ret = $this->db->query('DELETE FROM OAUTH_CODE_SESSION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
+			$ret = $this->db->query('DELETE FROM OAUTH_SESSION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
+			$ret = $this->db->query('DELETE FROM ACCOUNT_SESSION  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
+			$ret = $this->db->query('DELETE FROM ACCOUNT_ACTIVITY  WHERE APP_ID = ' . $APP_ID); if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : Failed to delete from the table 01')); }
 
 			// アカウントの削除は1000件づつ処理
 			$len = count($targetAccounts);
@@ -733,13 +731,13 @@ class clsAccountBase {
 				foreach ($chunkedAccounts as $chunk) {
 					$idString = implode(',', $chunk);
 					$ret = $this->db->query('DELETE FROM ACCOUNT WHERE ACCOUNT_ID IN (' . $idString . ')');
-					if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 01')); }
+					if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 01')); }
 
 					$ret = $this->db->query('DELETE FROM ACCOUNT_INFO_VERIFIED WHERE ACCOUNT_ID IN (' . $idString . ')');
-					if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 02')); }
+					if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 02')); }
 
 					$ret = $this->db->query('DELETE FROM AUTH_VERIFY WHERE ACCOUNT_ID IN (' . $idString . ')');
-					if ($ret === false){ throw new Exception($this->msg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 03')); }
+					if ($ret === false){ throw new Exception($this->baseMsg->_('SYSTEM ERROR : DELETE ACCOUNT INFORMATION 03')); }
 				}
 			}
 

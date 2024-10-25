@@ -1,8 +1,10 @@
 <?php
 namespace tlib;
 
+use mysqli_result;
+
 /*
- * DB ラッパークラス
+ * mysqli DB ラッパークラス
  */
 
 class clsDB extends \mysqli {
@@ -42,7 +44,7 @@ class clsDB extends \mysqli {
 		if ($this->connect_errno){
 			$this->errorInfo = $this->connect_errno . ' : ' . $this->connect_error;
 			if ($this->logFolder != ''){
-				\tlib\util::vitalLogOut(3, $this->errorInfo, $this->logFolder);
+				util::vitalLogOut(3, $this->errorInfo, $this->logFolder);
 			}
 		}
 		$this->bConnected = true;
@@ -140,6 +142,34 @@ class clsDB extends \mysqli {
 		return $aryRet;
 	}
 
+	// プリペアードステートメントを実行し、全結果の配列を返す。
+	public function getAllWithPS(string $sql, ?array $params = null): null|array {
+		$ret = $this->execute_query($sql, $params);
+		if ($ret === FALSE){ return null; }
+
+		$aryRet = array();
+		while(($row = $ret->fetch_row())){
+			$aryRet[] = $row;
+		}
+		$ret->free();
+
+		return $aryRet;
+	}
+
+	// プリペアードステートメントを実行し、全結果の配列を返す。(fetch_assoc版)
+	public function getAllAssocWithPS(string $sql, ?array $params = null): null|array {
+		$ret = $this->execute_query($sql, $params);
+		if ($ret === FALSE){ return null; }
+
+		$aryRet = array();
+		while(($row = $ret->fetch_assoc())){
+			$aryRet[] = $row;
+		}
+		$ret->free();
+
+		return $aryRet;
+	}
+
 	// テーブルロックを行う。（NG時は1秒waitし、10回トライ）
 	// $tablesはarray
 	public function writeLockTable(array $tables) : bool{
@@ -161,7 +191,7 @@ class clsDB extends \mysqli {
 	private function whenQueryError($sql){
 		$this->errorInfo = $this->errno . ' : ' . $this->error . ' : ' . $sql;
 		if ($this->logFolder != ''){
-			\tlib\util::vitalLogOut(3, $this->errorInfo, $this->logFolder);
+			util::vitalLogOut(3, $this->errorInfo, $this->logFolder);
 		}
 	}
 }
