@@ -14,17 +14,19 @@ class core {
 	 * @param clsDB $db アカウント用のDBオブジェクト
 	 * @param integer $client_id ログイン中か調べるclient_id
 	 * @param string $SESSION_CODE セッション $bUpdateSessionCodeの場合、変更の可能性あり。
+	 * @param int $USER_TYPE アプリケーション側でユーザに色を付けたい場合、設定するオプション
 	 * @param int $dayOfSessionUpdate 最後にSESSIONコードを更新してからこの日数経過していたら、$SESSION_CODEを別の値に書き換える。ついでに有効期限も延長する。　0で書き換え無し
-	 * @param bool $bUpdateExpireDate $loginExpiredDaysの半分以下の有効期限となっていた場合、有効期限を伸ばす場合はtrue
+	 * @param bool $bUpdateExpireDate SESSIONの有効期限を無条件で伸ばす場合はtrue
 	 * @return integer ログインしているuserのUSER_ID ログインしていない場合は0
 	 */
-
-	static function isLogin(clsDB $db, int $client_id, string &$SESSION_CODE, int $dayOfSessionUpdate = 1, bool $bUpdateExpireDate = true) : int{
+	static function isLoginOAUTH2(clsDB &$db, int $client_id, string &$SESSION_CODE, int $USER_TYPE = 0, int $dayOfSessionUpdate = 1, bool $bUpdateExpireDate = false) : int{
 
 		// $SESSION_CODEは外部から渡される可能性があるので、一応エスケープしておく。
 		$escapeSESSION_CODE = $db->real_escape_string($SESSION_CODE);
 
-		$sql = 'SELECT ID, USER_ID, EXPIRES, DATEDIFF(now(), UPDATE_TIME) FROM OA2_ACCESS_TOKENS WHERE CLIENT_ID = ' . $client_id . ' AND ACCESS_TOKEN = "' . $escapeSESSION_CODE . '" AND EXPIRES > now()';
+		$sql = 'SELECT OAT.ID, OAT.USER_ID, OAT.EXPIRES, DATEDIFF(now(), OAT.UPDATE_TIME) FROM OA2_ACCESS_TOKENS AS OAT
+		 LEFT JOIN USERS AS U ON OAT.USER_ID = U.USER_ID
+		 WHERE OAT.CLIENT_ID = ' . $client_id . ' AND OAT.ACCESS_TOKEN = "' . $escapeSESSION_CODE . '" AND OAT.EXPIRES > now() AND U.USER_TYPE = ' . $USER_TYPE;
 		$ACCESS_INFO = $db->getFirstRow($sql);
 		if ($ACCESS_INFO === null){ return 0; }
 
@@ -50,6 +52,64 @@ class core {
 		}
 
 		return $USER_ID;
+	}
+
+	/**
+	 * Checks if a user is logged in. USER_SESSIONS table using.
+	 *
+	 * @param clsDB $db The database connection object.
+	 * @param int $userId The ID of the user.
+	 * @param string $sessionCode The session code, sometime this might be changed.
+	 * @return int ログインしているuserのUSER_ID ログインしていない場合は0.
+	 */
+	static function isLogin(clsDB &$db, string &$sessionCode): int{
+
+		$escapeSESSION_CODE = $db->real_escape_string($sessionCode);
+        $sql = 'SELECT USER_ID, SESSION_ID, EXPIRATION_TIME FROM USER_SESSIONS
+		WHERE SESSION_TOKEN = "' . $escapeSESSION_CODE . '"';
+        $session = $db->getFirstRowAssoc($sql);
+
+        if ($session === null) { return 0; }
+
+		$userId = (int)$session['USER_ID'];
+
+        $expirationTime = strtotime($session['EXPIRATION_TIME']);
+        $currentTime = time();
+        if ($expirationTime < $currentTime) {
+			$sql = 'DELETE FROM USER_SESSIONS WHERE SESSION_ID = ' . $session['SESSION_ID'];
+			$db->query($sql);
+            return 0;
+        }
+
+		// 期限が近い場合は、新しいセッションコードを発行する
+		if (($expirationTime - $currentTime) <= 604800) { // 604800 = (7 * 86400) 7日
+
+			$newSessionCode = '';
+			for ($i = 0; $i < 10; $i++) {
+				$token = util::getRandamCode128();
+				$sql = 'SELECT COUNT(*) FROM USER_SESSIONS WHERE SESSION_TOKEN = "' . $token . '"';
+				if ($db->getFirstOne($sql) == 0) {
+					$newSessionCode = $token;
+					break;
+				}
+			}
+
+			if ($newSessionCode !== ''){
+				$newExpirationTime = date('Y-m-d H:i:s', strtotime('+' . TLIB_LOGIN_EXPIRE_DAYS . ' days'));
+				$updateSql = 'UPDATE USER_SESSIONS SET SESSION_TOKEN = "' . $db->real_escape_string($newSessionCode) . '",
+				EXPIRATION_TIME = "' . $newExpirationTime . '" WHERE SESSION_TOKEN = "' . $escapeSESSION_CODE . '"';
+				$ret = $db->query($updateSql);
+				if ($ret){ $sessionCode = $newSessionCode; }
+			}
+		}
+        return $userId;
+	}
+
+	static function isLoginWeb(clsDB &$db){
+		$sessinonCode = $_COOKIE['SESS'];
+		$userId = core::isLogin($db, $sessinonCode);
+		setCookie('SESS', $sessinonCode, time() + TLIB_LOGIN_EXPIRE_DAYS * 86400, '/');
+		return $userId;
 	}
 
 }
@@ -574,7 +634,6 @@ class util{
 					}
 				}
 			}
-
 		}
 	}
 
@@ -585,10 +644,14 @@ class util{
 	 * @return string 生成文字列
 	 */
 	static function makeRandStr(int $length) : string {
-		$str = array_merge(range('a', 'z'), range('0', '9'), range('A', 'Z'));
-		$r_str = null;
-		for ($i = 0; $i < $length; $i++){ $r_str .= $str[rand(0, count($str) - 1)]; }
-		return $r_str;
+		$characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+		$charactersLength = strlen($characters);
+		$randomString = '';
+		for ($i = 0; $i < $length; $i++) {
+			$randomString .= $characters[rand(0, $charactersLength - 1)];
+		}
+		return $randomString;
+
 	}
 
 	/**
@@ -710,9 +773,9 @@ class util{
 	 * @param string $logMessage The message to be logged.
 	 * @return bool Returns true if the log entry was successfully written, false otherwise.
 	 */
-	static function systemLog(clsDB &$db, int $userId, int $logType, string $logMessage): bool {
-		$sql = 'INSERT INTO SYSTEM_LOG (USER_ID, LOG_TYPE, LOG_MESSAGE) VALUES
-		(' . $userId . ',' . $logType . ',"' . $db->real_escape_string($logMessage) . '")';
+	static function systemLog(clsDB &$db, int $companyId=0, int $userId, int $logType, string $logMessage): bool {
+		$sql = 'INSERT INTO SYSTEM_LOG (USER_ID, COMPANY_ID, LOG_TYPE, LOG_MESSAGE) VALUES
+		(' . $userId . ',' . $companyId . ',' . $logType . ',"' . $db->real_escape_string($logMessage) . '")';
 		return (bool)$db->query($sql);
 	}
 
@@ -753,4 +816,5 @@ class util{
 	 * @return string The hashed password.
 	 */
 	static function getPasswordHash(string $password) : string{ return hash('sha3-512',  $password . TLIB_HASH_SOLT); }
+
 }

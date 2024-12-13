@@ -11,7 +11,7 @@ namespace tlib;
  * $generator = new TranslationFileGenerator(['en', 'ja']);
  * $generator->generate('/path/to/php/files');
  *
- * Files with "locale" in the folder name will be skipped.
+ * Files with "locale" in the path will be skipped.
  *
  */
 class clsTranslationFileGenerator

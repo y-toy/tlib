@@ -1,9 +1,27 @@
 /*****************************************************************************/
-/*** ユーザ情報 一般的な１社で利用するシステム ***/
+/*** ユーザ情報 多数の会社に提供するクラウドシステム ***/
+/*****************************************************************************/
+
+CREATE TABLE `COMPANIES` (
+    `COMPANY_ID` BIGINT UNSIGNED NOT NULL PRIMARY KEY comment '企業ID 1はスーパーユーザ 1000から一般企業ID',
+	`COMPANY_ID_CHARS` VARCHAR(128) UNIQUE comment 'hash("sha3-512", datetime+fixed-solt+randam(32)) 企業ID識別子 必ず英数混在（USER_IDの数値を外に出したくない場合用）',
+	`COMPANY_ID_CHARS_SHORT` varchar(12) UNIQUE comment '企業ID識別子 短いバージョン',
+    `COMPANY_NAME` VARCHAR(255) NOT NULL UNIQUE comment '企業名',
+	`MULTI_LANG` TINYINT UNSIGNED DEFAULT 0 comment '多言語対応の場合1',
+    `STATUS` TINYINT DEFAULT 0 comment '0 登録中 1 通常 9 削除',
+    `INSERT_TIME` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP comment '登録時間',
+    `UPDATE_TIME` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP comment '更新時間'
+) comment '企業情報';
+
+INSERT INTO COMPANIES (COMPANY_ID, COMPANY_ID_CHARS, COMPANY_NAME, VALID, INSERT_TIME, UPDATE_TIME) VALUES (1, "SUPER_ADMIN_USERS", 'Super Users', 1, now(), now());
+
+/*****************************************************************************/
+/*** 企業内ユーザ情報 ***/
 /*****************************************************************************/
 
 CREATE TABLE `USERS` (
 	`USER_ID` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    `COMPANY_ID` BIGINT UNSIGNED NOT NULL comment 'COMPANIES::COMPANY_ID 0はスーパーユーザ',
 	'USER_ID_CHARS' VARCHAR(128) UNIQUE comment 'hash("sha3-512", datetime+fixed-solt+randam(32)) ユーザID識別子 必ず英数混在（USER_IDの数値を外に出したくない場合用）',
 	'USER_TYPE' TINYINT UNSIGNED DEFAULT 0 comment 'ユーザの種類 0: 一般ユーザ 1: システム管理ユーザ',
 	`USER_NAME` VARCHAR(255) NOT NULL comment 'ユーザ名 基本はメールアドレス / 電話番号',
@@ -13,10 +31,14 @@ CREATE TABLE `USERS` (
 	`VALID` TINYINT DEFAULT 0 comment '有効なアカウントの場合1 登録中は0',
 	`INSERT_TIME` TIMESTAMP NOT NULL comment '登録時間',
 	`UPDATE_TIME` TIMESTAMP NOT NULL CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP comment '更新時間',
-	INDEX INDEX_ACCOUNT_ID_CHARS (USER_ID_CHARS),
+	FOREIGN KEY (`COMPANY_ID`) REFERENCES `COMPANIES`(`COMPANY_ID`) ON DELETE CASCADE,
+	INDEX INDEX_USER_ID_CHARS (USER_ID_CHARS),
+	INDEX INDEX_COMPANY_ID (COMPANY_ID),
+	INDEX INDEX_COMPANY_ID_USER_ID (COMPANY_ID, USER_ID),
 	INDEX INDEX_USER_NAME (USER_NAME)
 ) comment 'ユーザ認証情報';
 
+-- same as USER_VERIFICATIONS in account.sql
 CREATE TABLE `USER_VERIFICATIONS` (
     `VERIFICATION_ID` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     `USER_ID` BIGINT UNSIGNED NOT NULL comment 'USERS::USER_ID',
@@ -28,6 +50,7 @@ CREATE TABLE `USER_VERIFICATIONS` (
     INDEX INDEX_USER_ID (USER_ID)
 ) comment 'ユーザの登録しているメールアドレス／SMS';
 
+-- same as USER_VERIFICATIONS_SESSION in account.sql
 CREATE TABLE `USER_VERIFICATIONS_SESSION` (
 	`USER_ID` BIGINT UNSIGNED NOT NULL comment 'USERS::USER_ID',
 	`SESSION_CODE` VARCHAR(128) UNIQUE comment 'hash("sha3-512", datetime+fixed-solt+randam(32))',
@@ -48,35 +71,29 @@ CREATE TABLE `USER_VERIFICATIONS_SESSION` (
 
 CREATE TABLE `GROUPS` (
 	`GROUP_ID` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    `COMPANY_ID` BIGINT UNSIGNED NOT NULL comment 'COMPANIES::COMPANY_ID',
 	`GROUP_NAMES` JSON NOT NULL comment 'グループ名を多言語で管理 {"en": "English Name", "ja": "日本語名"} ISO639 2 letter code',
 	'USER_TYPE' TINYINT UNSIGNED DEFAULT 0 comment 'このグループを使うユーザの種類 0: 一般ユーザ 1: システム管理ユーザ',
 	`INSERT_TIME` TIMESTAMP NOT NULL comment '登録時間',
 	`UPDATE_TIME` TIMESTAMP NOT NULL comment '更新時間',
-	INDEX INDEX_GROUP_ID (GROUP_ID) comment '組織IDにインデックスを設定'
+	FOREIGN KEY (`COMPANY_ID`) REFERENCES `COMPANIES`(`COMPANY_ID`) ON DELETE CASCADE,
+	INDEX INDEX_GROUP_ID (GROUP_ID) comment '組織IDにインデックスを設定',
+	INDEX INDEX_COMPANY_ID (COMPANY_ID) comment '企業IDにインデックスを設定',
+	INDEX INDEX_COMPANY_ID_GROUP_ID (COMPANY_ID, GROUP_ID) comment '企業IDと組織IDにインデックスを設定'
 ) comment '組織を定義するテーブル';
 
 CREATE TABLE `ROLES` (
 	`ROLE_ID` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY comment '役割ID 0は管理サイトではなくユーザーサイト側の登録ユーザ',
+	`COMPANY_ID` BIGINT UNSIGNED NOT NULL comment 'COMPANIES::COMPANY_ID 0は全組織共通の役割',
 	`ROLE_NAMES` JSON NOT NULL comment '役割名を多言語で管理 {"en": "English Name", "ja": "日本語名"} ISO639 2 letter code',
+	`ROLE_INFOS` JSON DEFAULT JSON_OBJECT() comment '役割の詳細情報 閲覧可能ページ情報など',
 	`INSERT_TIME` TIMESTAMP NOT NULL comment '登録時間',
 	`UPDATE_TIME` TIMESTAMP NOT NULL comment '更新時間',
+	FOREIGN KEY (`COMPANY_ID`) REFERENCES `COMPANIES`(`COMPANY_ID`) ON DELETE CASCADE,
 	INDEX INDEX_ROLE_ID (ROLE_ID) comment '役割IDにインデックスを設定'
+	INDEX INDEX_COMPANY_ID (COMPANY_ID) comment '企業IDにインデックスを設定',
+	INDEX INDEX_COMPANY_ID_ROLE_ID (COMPANY_ID, ROLE_ID) comment '役割IDにインデックスを設定'
 ) comment '管理サイトでの役割を定義するテーブル';
-
-CREATE TABLE `USER_GROUP_ROLES` (
-	`USER_ID` BIGINT UNSIGNED NOT NULL comment 'USERS::USER_ID',
-	`GROUP_ID` BIGINT UNSIGNED NOT NULL comment 'GROUPS::GROUP_ID',
-	`ROLE_ID` BIGINT UNSIGNED NOT NULL comment 'ROLES::ROLE_ID',
-	`INSERT_TIME` TIMESTAMP NOT NULL comment '登録時間',
-	`UPDATE_TIME` TIMESTAMP NOT NULL comment '更新時間',
-	PRIMARY KEY (`USER_ID`, `GROUP_ID`, `ROLE_ID`),
-	FOREIGN KEY (`USER_ID`) REFERENCES `USERS`(`USER_ID`) ON DELETE CASCADE,
-	FOREIGN KEY (`GROUP_ID`) REFERENCES `GROUPS`(`GROUP_ID`) ON DELETE CASCADE,
-	FOREIGN KEY (`ROLE_ID`) REFERENCES `ROLES`(`ROLE_ID`) ON DELETE CASCADE,
-	INDEX INDEX_USER_ID (USER_ID) comment 'ユーザIDにインデックスを設定',
-	INDEX INDEX_GROUP_ID (GROUP_ID) comment '組織IDにインデックスを設定',
-	INDEX INDEX_ROLE_ID (ROLE_ID) comment '役割IDにインデックスを設定'
-) comment '管理ユーザがどの組織にどの役割で所属しているかを定義するテーブル';
 
 -- 例えば グループに「請求グループ」で「請求グループ」の出来ることをロールで定義し、ここに入れる。
 -- 人単位ではなくグループ単位とする。
@@ -116,3 +133,4 @@ CREATE TABLE `USER_SESSIONS` (
     INDEX INDEX_USER_ID (USER_ID),
     INDEX INDEX_SESSION_TOKEN (SESSION_TOKEN)
 ) comment 'ユーザのセッション情報';
+

@@ -3,6 +3,8 @@ vendor/*
 composer.lock
 zz_test/*
 zz_test
-locale/*
 logs/*
 config.php
+locale/**
+!locale/**/
+!locale/**/.gitkeep
